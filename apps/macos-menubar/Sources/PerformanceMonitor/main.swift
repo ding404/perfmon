@@ -47,19 +47,33 @@ struct PerformanceMonitorApp: App {
         MenuBarExtra {
             Button("Quit") { NSApplication.shared.terminate(nil) }
         } label: {
-            Text(menuBarSummary)
+            HStack(spacing: 2) {
+                metric(icon: "◉", value: percentage(model.snapshot.cpu_percent), width: 40)
+                metric(icon: "▤", value: percentage(model.snapshot.memory_percent), width: 40)
+                metric(icon: "↕", value: percentage(model.snapshot.swap_percent), width: 40)
+                metric(icon: "↓", value: compactRate(model.snapshot.rx_bytes_per_sec), width: 50)
+                metric(icon: "↑", value: compactRate(model.snapshot.tx_bytes_per_sec), width: 50)
+                metric(
+                    icon: "◫",
+                    value: "\(compactRate(model.snapshot.disk_read_bytes_per_sec))/\(compactRate(model.snapshot.disk_write_bytes_per_sec))",
+                    width: 90
+                )
+            }
             .font(.system(.caption2, design: .monospaced))
+            .frame(width: 322, alignment: .leading)
             .fixedSize(horizontal: true, vertical: false)
         }
     }
 
-    private var menuBarSummary: String {
-        "◉ \(fixed(percentage(model.snapshot.cpu_percent), width: 4))  "
-            + "▤ \(fixed(percentage(model.snapshot.memory_percent), width: 4))  "
-            + "↕ \(fixed(percentage(model.snapshot.swap_percent), width: 4))  "
-            + "↓ \(fixed(compactRate(model.snapshot.rx_bytes_per_sec), width: 6))  "
-            + "↑ \(fixed(compactRate(model.snapshot.tx_bytes_per_sec), width: 6))  "
-            + "◫ \(fixed(compactRate(model.snapshot.disk_read_bytes_per_sec), width: 6))/\(fixed(compactRate(model.snapshot.disk_write_bytes_per_sec), width: 6))"
+    private func metric(icon: String, value: String, width: CGFloat) -> some View {
+        HStack(spacing: 2) {
+            Text(icon)
+                .frame(width: 10, alignment: .center)
+            Text(value)
+                .frame(width: width - 12, alignment: .trailing)
+                .lineLimit(1)
+        }
+        .frame(width: width, alignment: .leading)
     }
 
     private func compactRate(_ bytes: UInt64) -> String {
@@ -80,12 +94,5 @@ struct PerformanceMonitorApp: App {
 
     private func percentage(_ value: Double) -> String {
         String(format: "%.0f%%", value)
-    }
-
-    private func fixed(_ value: String, width: Int) -> String {
-        if value.count >= width {
-            return String(value.prefix(width))
-        }
-        return String(repeating: " ", count: width - value.count) + value
     }
 }

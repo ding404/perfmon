@@ -171,7 +171,7 @@ fn render_top(f: &mut Frame, area: Rect, app: &App) {
     // ── Title bar (unchanged) ────────────────────────────────────────────
     let title = Paragraph::new(Line::from(vec![
         Span::styled(
-            "◉ Network Monitor",
+            "◉ Performance Monitor",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),

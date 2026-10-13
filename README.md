@@ -6,7 +6,7 @@ metrics, with gauges and sparkline history charts. Linux and macOS use separate
 platform collectors behind the same `PlatformMonitor` interface.
 
 ```
-┌ ◉ Network Monitor  │  interface: wlp2s0  │  iface 1/4  │  n/p: iface  │  i: auto-iface  │  r: reset  │  q: quit ┐
+┌ ◉ Performance Monitor  │  interface: wlp2s0  │  iface 1/4  │  n/p: iface  │  i: auto-iface  │  r: reset  │  q: quit ┐
 ┌ ▼ DL / ▲ UL / CPU / MEM / SWAP / DISK R / DISK W / DISK SPACE History (24h) ───────────────────────┐
 │ ▼ DL 1.2 MB/s  │⠀⠀⣀⡤⠖⠒⠒⠦⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣠⠴⠒⠒⠲⢤⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⡤⠴⠒⠒⠦⢤⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⡤⠖⠒⠒⠦⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣠⠴⠒⠒⠲⢤⣀⠀⠀⠀⠀⠀⠀⠀│
 │ ▲ UL 128 KB/s  │⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⡏⢹⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣰⠋⣇⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⡼⢹⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⡏⢧⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀│

@@ -43,7 +43,7 @@ final class MonitorModel: ObservableObject {
 
 @MainActor
 final class PerformanceMonitorDelegate: NSObject, NSApplicationDelegate {
-    private let statusWidth: CGFloat = 322
+    private let statusWidth: CGFloat = 410
     private var statusItem: NSStatusItem?
     private var model: MonitorModel?
 
@@ -62,7 +62,8 @@ final class PerformanceMonitorDelegate: NSObject, NSApplicationDelegate {
 
     private func updateStatusItem() {
         guard let button = statusItem?.button, let snapshot = model?.snapshot else { return }
-        button.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+        let menuBarPointSize = NSFont.menuBarFont(ofSize: 0).pointSize
+        button.font = NSFont.monospacedSystemFont(ofSize: menuBarPointSize, weight: .regular)
         button.alignment = .left
         button.cell?.wraps = false
         button.cell?.isScrollable = true

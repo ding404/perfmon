@@ -52,15 +52,18 @@ struct PerformanceMonitorApp: App {
                 .frame(width: 322, alignment: .leading)
                 .lineLimit(1)
                 .clipped()
+                .transaction { transaction in
+                    transaction.animation = nil
+                }
         }
     }
 
     private var menuBarSummary: String {
-        "◉\(fixed(percentage(model.snapshot.cpu_percent), width: 4)) "
-            + "▤\(fixed(percentage(model.snapshot.memory_percent), width: 4)) "
-            + "↕\(fixed(percentage(model.snapshot.swap_percent), width: 4)) "
-            + "↓\(fixed(compactRate(model.snapshot.rx_bytes_per_sec), width: 6)) "
-            + "↑\(fixed(compactRate(model.snapshot.tx_bytes_per_sec), width: 6)) "
+        "◉\(fixed(percentage(model.snapshot.cpu_percent), width: 4))\u{00A0}"
+            + "▤\(fixed(percentage(model.snapshot.memory_percent), width: 4))\u{00A0}"
+            + "↕\(fixed(percentage(model.snapshot.swap_percent), width: 4))\u{00A0}"
+            + "↓\(fixed(compactRate(model.snapshot.rx_bytes_per_sec), width: 6))\u{00A0}"
+            + "↑\(fixed(compactRate(model.snapshot.tx_bytes_per_sec), width: 6))\u{00A0}"
             + "◫\(fixed(compactRate(model.snapshot.disk_read_bytes_per_sec), width: 6))/\(fixed(compactRate(model.snapshot.disk_write_bytes_per_sec), width: 6))"
     }
 
@@ -88,6 +91,6 @@ struct PerformanceMonitorApp: App {
         if value.count >= width {
             return String(value.prefix(width))
         }
-        return String(repeating: " ", count: width - value.count) + value
+        return String(repeating: "\u{00A0}", count: width - value.count) + value
     }
 }

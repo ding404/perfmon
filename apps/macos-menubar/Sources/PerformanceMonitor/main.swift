@@ -43,7 +43,7 @@ final class MonitorModel: ObservableObject {
 
 @MainActor
 final class PerformanceMonitorDelegate: NSObject, NSApplicationDelegate {
-    private let statusWidth: CGFloat = 410
+    private let statusWidth: CGFloat = 450
     private var statusItem: NSStatusItem?
     private var model: MonitorModel?
 
@@ -69,7 +69,7 @@ final class PerformanceMonitorDelegate: NSObject, NSApplicationDelegate {
         button.cell?.isScrollable = true
         button.cell?.lineBreakMode = .byClipping
         button.cell?.truncatesLastVisibleLine = false
-        button.title = summary(for: snapshot)
+        button.attributedTitle = attributedSummary(for: snapshot, font: button.font ?? NSFont.systemFont(ofSize: 13))
     }
 
     private func makeMenu() -> NSMenu {
@@ -84,13 +84,40 @@ final class PerformanceMonitorDelegate: NSObject, NSApplicationDelegate {
         NSApplication.shared.terminate(nil)
     }
 
-    private func summary(for snapshot: PerfmonSnapshot) -> String {
-        "◉\(fixed(percentage(snapshot.cpu_percent), width: 4))\u{00A0}"
-            + "▤\(fixed(percentage(snapshot.memory_percent), width: 4))\u{00A0}"
-            + "↕\(fixed(percentage(snapshot.swap_percent), width: 4))\u{00A0}"
-            + "↓\(fixed(compactRate(snapshot.rx_bytes_per_sec), width: 6))\u{00A0}"
-            + "↑\(fixed(compactRate(snapshot.tx_bytes_per_sec), width: 6))\u{00A0}"
-            + "◫\(fixed(compactRate(snapshot.disk_read_bytes_per_sec), width: 6))/\(fixed(compactRate(snapshot.disk_write_bytes_per_sec), width: 6))"
+    private func attributedSummary(for snapshot: PerfmonSnapshot, font: NSFont) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.labelColor,
+        ]
+
+        appendSymbol("cpu", to: result, font: font)
+        appendText(fixed(percentage(snapshot.cpu_percent), width: 4) + "\u{00A0}", to: result, attributes: attributes)
+        appendSymbol("memorychip", to: result, font: font)
+        appendText(fixed(percentage(snapshot.memory_percent), width: 4) + "\u{00A0}", to: result, attributes: attributes)
+        appendSymbol("arrow.triangle.2.circlepath", to: result, font: font)
+        appendText(fixed(percentage(snapshot.swap_percent), width: 4) + "\u{00A0}", to: result, attributes: attributes)
+        appendSymbol("wifi", to: result, font: font)
+        appendText("↓" + fixed(compactRate(snapshot.rx_bytes_per_sec), width: 6) + " ↑" + fixed(compactRate(snapshot.tx_bytes_per_sec), width: 6) + "\u{00A0}", to: result, attributes: attributes)
+        appendSymbol("internaldrive", to: result, font: font)
+        appendText(fixed(compactRate(snapshot.disk_read_bytes_per_sec), width: 6) + "/" + fixed(compactRate(snapshot.disk_write_bytes_per_sec), width: 6), to: result, attributes: attributes)
+        return result
+    }
+
+    private func appendSymbol(_ name: String, to result: NSMutableAttributedString, font: NSFont) {
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: name)
+            ?? NSImage(systemSymbolName: "circle", accessibilityDescription: nil)
+        guard let image else { return }
+        let configuration = NSImage.SymbolConfiguration(pointSize: font.pointSize, weight: .regular)
+        let configuredImage = image.withSymbolConfiguration(configuration) ?? image
+        let attachment = NSTextAttachment()
+        attachment.image = configuredImage
+        attachment.bounds = NSRect(x: 0, y: -1, width: font.pointSize, height: font.pointSize)
+        result.append(NSAttributedString(attachment: attachment))
+    }
+
+    private func appendText(_ text: String, to result: NSMutableAttributedString, attributes: [NSAttributedString.Key: Any]) {
+        result.append(NSAttributedString(string: text, attributes: attributes))
     }
 
     private func compactRate(_ bytes: UInt64) -> String {

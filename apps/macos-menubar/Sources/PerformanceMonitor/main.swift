@@ -62,38 +62,31 @@ struct PerformanceMonitorApp: App {
     }
 
     private var menuBarSummary: String {
-        "◉\(fixed(percentage(model.snapshot.cpu_percent), width: 4))\u{00A0}"
-            + "▤\(fixed(percentage(model.snapshot.memory_percent), width: 4))\u{00A0}"
-            + "↕\(fixed(percentage(model.snapshot.swap_percent), width: 4))\u{00A0}"
-            + "↓\(fixed(compactRate(model.snapshot.rx_bytes_per_sec), width: 6))\u{00A0}"
-            + "↑\(fixed(compactRate(model.snapshot.tx_bytes_per_sec), width: 6))\u{00A0}"
-            + "◫\(fixed(compactRate(model.snapshot.disk_read_bytes_per_sec), width: 6))/\(fixed(compactRate(model.snapshot.disk_write_bytes_per_sec), width: 6))"
+        "◉\(percentage(model.snapshot.cpu_percent))\u{00A0}"
+            + "▤\(percentage(model.snapshot.memory_percent))\u{00A0}"
+            + "↕\(percentage(model.snapshot.swap_percent))\u{00A0}"
+            + "↓\(compactRate(model.snapshot.rx_bytes_per_sec))\u{00A0}"
+            + "↑\(compactRate(model.snapshot.tx_bytes_per_sec))\u{00A0}"
+            + "◫\(compactRate(model.snapshot.disk_read_bytes_per_sec))/\(compactRate(model.snapshot.disk_write_bytes_per_sec))"
     }
 
     private func compactRate(_ bytes: UInt64) -> String {
         if bytes >= 1_099_511_627_776 {
-            return String(format: "%.1fT", Double(bytes) / 1_099_511_627_776.0)
+            return String(format: "%05.1fT", min(Double(bytes) / 1_099_511_627_776.0, 999.9))
         }
         if bytes >= 1_073_741_824 {
-            return String(format: "%.1fG", Double(bytes) / 1_073_741_824.0)
+            return String(format: "%05.1fG", min(Double(bytes) / 1_073_741_824.0, 999.9))
         }
         if bytes >= 1_048_576 {
-            return String(format: "%.1fM", Double(bytes) / 1_048_576.0)
+            return String(format: "%05.1fM", min(Double(bytes) / 1_048_576.0, 999.9))
         }
         if bytes >= 1_024 {
-            return String(format: "%.1fK", Double(bytes) / 1_024.0)
+            return String(format: "%05.1fK", min(Double(bytes) / 1_024.0, 999.9))
         }
-        return "\(bytes)B"
+        return String(format: "%05dB", min(bytes, 99_999))
     }
 
     private func percentage(_ value: Double) -> String {
-        String(format: "%.0f%%", value)
-    }
-
-    private func fixed(_ value: String, width: Int) -> String {
-        if value.count >= width {
-            return String(value.prefix(width))
-        }
-        return String(repeating: "\u{00A0}", count: width - value.count) + value
+        String(format: "%03.0f%%", min(max(value, 0), 999))
     }
 }

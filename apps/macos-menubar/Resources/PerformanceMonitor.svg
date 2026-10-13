@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="background" x1="120" y1="80" x2="900" y2="960" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#202B5B"/>
+      <stop offset="0.52" stop-color="#111A3B"/>
+      <stop offset="1" stop-color="#080D21"/>
+    </linearGradient>
+    <linearGradient id="gauge" x1="190" y1="650" x2="840" y2="650" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#29D3FF"/>
+      <stop offset="0.55" stop-color="#4CE4B0"/>
+      <stop offset="1" stop-color="#B9F34A"/>
+    </linearGradient>
+    <linearGradient id="needle" x1="512" y1="650" x2="706" y2="338" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#72E7FF"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="24" stdDeviation="22" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <rect x="34" y="34" width="956" height="956" rx="224" fill="url(#background)" filter="url(#shadow)"/>
+  <circle cx="512" cy="512" r="365" fill="#FFFFFF" opacity="0.035"/>
+  <circle cx="512" cy="512" r="300" fill="none" stroke="#FFFFFF" stroke-opacity="0.07" stroke-width="3"/>
+
+  <path d="M 190 650 A 322 322 0 0 1 834 650" fill="none" stroke="#EAF4FF" stroke-opacity="0.2" stroke-width="70" stroke-linecap="round"/>
+  <path d="M 190 650 A 322 322 0 0 1 834 650" fill="none" stroke="url(#gauge)" stroke-width="42" stroke-linecap="round"/>
+
+  <path d="M 512 650 L 704 350" fill="none" stroke="#050A1C" stroke-opacity="0.55" stroke-width="46" stroke-linecap="round"/>
+  <path d="M 512 650 L 704 350" fill="none" stroke="url(#needle)" stroke-width="30" stroke-linecap="round"/>
+  <circle cx="512" cy="650" r="62" fill="#0A1230" stroke="#FFFFFF" stroke-width="16"/>
+  <circle cx="512" cy="650" r="21" fill="#72E7FF"/>
+
+  <rect x="256" y="736" width="92" height="122" rx="30" fill="#29D3FF"/>
+  <rect x="386" y="684" width="92" height="174" rx="30" fill="#4CE4B0"/>
+  <rect x="516" y="624" width="92" height="234" rx="30" fill="#B9F34A"/>
+  <rect x="646" y="704" width="92" height="154" rx="30" fill="#FFCA5C"/>
+</svg>

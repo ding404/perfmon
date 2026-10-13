@@ -1,6 +1,6 @@
 # PerformanceMonitor macOS menu-bar app
 
-This is the SwiftUI frontend for the Rust `perfmon-ffi` collector.
+This is the macOS menu-bar frontend for the Rust `perfmon-ffi` collector.
 
 Build the Rust static library first, then build this Swift package:
 
@@ -10,6 +10,15 @@ cd apps/macos-menubar
 swift build -c release
 ```
 
-The app uses `MenuBarExtra` and polls the fixed-layout `PerfmonSnapshot` C ABI
-once per second. Rust retains ownership of the platform collector; SwiftUI only
-owns presentation and the menu-bar lifecycle.
+The executable uses AppKit's `NSStatusItem` and polls the fixed-layout
+`PerfmonSnapshot` C ABI once per second. Rust retains ownership of the platform
+collector; the macOS frontend owns presentation and the menu-bar lifecycle.
+
+To build a Finder-launchable `.app` with the desktop icon:
+
+```sh
+./apps/macos-menubar/build-app.sh "$HOME/Applications/PerformanceMonitor.app"
+```
+
+The icon is a performance gauge with a live needle and resource bars, stored in
+`Resources/PerformanceMonitor.icns` with its SVG master alongside it.

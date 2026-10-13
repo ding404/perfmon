@@ -48,22 +48,27 @@ struct PerformanceMonitorApp: App {
             Button("Quit") { NSApplication.shared.terminate(nil) }
         } label: {
             Text(menuBarSummary)
-            .font(.caption2)
-            .monospacedDigit()
+            .font(.system(.caption2, design: .monospaced))
             .fixedSize(horizontal: true, vertical: false)
         }
     }
 
     private var menuBarSummary: String {
-        "◉ \(percentage(model.snapshot.cpu_percent))  "
-            + "▤ \(percentage(model.snapshot.memory_percent))  "
-            + "↕ \(percentage(model.snapshot.swap_percent))  "
-            + "↓ \(compactRate(model.snapshot.rx_bytes_per_sec))  "
-            + "↑ \(compactRate(model.snapshot.tx_bytes_per_sec))  "
-            + "◫ \(compactRate(model.snapshot.disk_read_bytes_per_sec))/\(compactRate(model.snapshot.disk_write_bytes_per_sec))"
+        "◉ \(fixed(percentage(model.snapshot.cpu_percent), width: 4))  "
+            + "▤ \(fixed(percentage(model.snapshot.memory_percent), width: 4))  "
+            + "↕ \(fixed(percentage(model.snapshot.swap_percent), width: 4))  "
+            + "↓ \(fixed(compactRate(model.snapshot.rx_bytes_per_sec), width: 6))  "
+            + "↑ \(fixed(compactRate(model.snapshot.tx_bytes_per_sec), width: 6))  "
+            + "◫ \(fixed(compactRate(model.snapshot.disk_read_bytes_per_sec), width: 6))/\(fixed(compactRate(model.snapshot.disk_write_bytes_per_sec), width: 6))"
     }
 
     private func compactRate(_ bytes: UInt64) -> String {
+        if bytes >= 1_099_511_627_776 {
+            return String(format: "%.1fT", Double(bytes) / 1_099_511_627_776.0)
+        }
+        if bytes >= 1_073_741_824 {
+            return String(format: "%.1fG", Double(bytes) / 1_073_741_824.0)
+        }
         if bytes >= 1_048_576 {
             return String(format: "%.1fM", Double(bytes) / 1_048_576.0)
         }
@@ -75,5 +80,12 @@ struct PerformanceMonitorApp: App {
 
     private func percentage(_ value: Double) -> String {
         String(format: "%.0f%%", value)
+    }
+
+    private func fixed(_ value: String, width: Int) -> String {
+        if value.count >= width {
+            return String(value.prefix(width))
+        }
+        return String(repeating: " ", count: width - value.count) + value
     }
 }

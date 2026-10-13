@@ -140,10 +140,13 @@ final class PerformanceMonitorDelegate: NSObject, NSApplicationDelegate {
 }
 
 @main
-struct PerformanceMonitorApp: App {
-    @NSApplicationDelegateAdaptor(PerformanceMonitorDelegate.self) private var delegate
-
-    var body: some Scene {
-        Settings { EmptyView() }
+struct PerformanceMonitorApp {
+    @MainActor
+    static func main() {
+        let application = NSApplication.shared
+        let delegate = PerformanceMonitorDelegate()
+        application.delegate = delegate
+        application.setActivationPolicy(.accessory)
+        application.run()
     }
 }

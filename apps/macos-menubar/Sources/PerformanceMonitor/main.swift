@@ -52,8 +52,11 @@ struct PerformanceMonitorApp: App {
                 .frame(width: 322, alignment: .leading)
                 .lineLimit(1)
                 .clipped()
+                .contentTransition(.identity)
+                .animation(nil, value: menuBarSummary)
                 .transaction { transaction in
                     transaction.animation = nil
+                    transaction.disablesAnimations = true
                 }
         }
     }

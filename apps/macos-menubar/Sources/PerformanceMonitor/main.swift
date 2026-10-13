@@ -12,7 +12,9 @@ final class MonitorModel: ObservableObject {
     init() {
         handle = perfmon_create()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.sample()
+            Task { @MainActor [weak self] in
+                self?.sample()
+            }
         }
         sample()
     }
@@ -42,35 +44,46 @@ struct PerformanceMonitorApp: App {
     @StateObject private var model = MonitorModel()
 
     var body: some Scene {
-        MenuBarExtra(model.statusText, systemImage: "gauge.with.dots.needle.67percent") {
-            VStack(alignment: .leading, spacing: 8) {
-                metric("CPU", value: String(format: "%.1f%%", model.snapshot.cpu_percent))
-                metric("Memory", value: String(format: "%.1f%%", model.snapshot.memory_percent))
-                metric("Swap", value: String(format: "%.1f%%", model.snapshot.swap_percent))
-                metric("Wi-Fi ↓", value: formatRate(model.snapshot.rx_bytes_per_sec))
-                metric("Wi-Fi ↑", value: formatRate(model.snapshot.tx_bytes_per_sec))
-                Divider()
-                Button("Quit") { NSApplication.shared.terminate(nil) }
+        MenuBarExtra {
+            Button("Quit") { NSApplication.shared.terminate(nil) }
+        } label: {
+            HStack(spacing: 7) {
+                menuMetric("cpu", value: percentage(model.snapshot.cpu_percent))
+                menuMetric("memorychip", value: percentage(model.snapshot.memory_percent))
+                menuMetric("arrow.up.arrow.down", value: percentage(model.snapshot.swap_percent))
+                menuMetric("arrow.down", value: compactRate(model.snapshot.rx_bytes_per_sec))
+                menuMetric("arrow.up", value: compactRate(model.snapshot.tx_bytes_per_sec))
+                menuMetric(
+                    "internaldrive",
+                    value: compactRate(model.snapshot.disk_read_bytes_per_sec)
+                        + "/"
+                        + compactRate(model.snapshot.disk_write_bytes_per_sec)
+                )
             }
-            .padding(12)
+            .font(.caption2)
+            .monospacedDigit()
+            .fixedSize(horizontal: true, vertical: false)
         }
     }
 
-    private func metric(_ name: String, value: String) -> some View {
-        HStack {
-            Text(name)
-            Spacer()
-            Text(value).monospacedDigit()
+    private func menuMetric(_ symbol: String, value: String) -> some View {
+        HStack(spacing: 2) {
+            Image(systemName: symbol)
+            Text(value)
         }
     }
 
-    private func formatRate(_ bytes: UInt64) -> String {
+    private func compactRate(_ bytes: UInt64) -> String {
         if bytes >= 1_048_576 {
-            return String(format: "%.1f MB/s", Double(bytes) / 1_048_576.0)
+            return String(format: "%.1fM", Double(bytes) / 1_048_576.0)
         }
         if bytes >= 1_024 {
-            return String(format: "%.1f KB/s", Double(bytes) / 1_024.0)
+            return String(format: "%.1fK", Double(bytes) / 1_024.0)
         }
-        return "\(bytes) B/s"
+        return "\(bytes)B"
+    }
+
+    private func percentage(_ value: Double) -> String {
+        String(format: "%.0f%%", value)
     }
 }

@@ -69,7 +69,9 @@ final class PerformanceMonitorDelegate: NSObject, NSApplicationDelegate {
         button.cell?.isScrollable = true
         button.cell?.lineBreakMode = .byClipping
         button.cell?.truncatesLastVisibleLine = false
-        button.attributedTitle = attributedSummary(for: snapshot, font: button.font ?? NSFont.systemFont(ofSize: 13))
+        let font = button.font ?? NSFont.systemFont(ofSize: 13)
+        let summary = attributedSummary(for: snapshot, font: font)
+        button.attributedTitle = summary
     }
 
     private func makeMenu() -> NSMenu {
@@ -108,11 +110,12 @@ final class PerformanceMonitorDelegate: NSObject, NSApplicationDelegate {
         let image = NSImage(systemSymbolName: name, accessibilityDescription: name)
             ?? NSImage(systemSymbolName: "circle", accessibilityDescription: nil)
         guard let image else { return }
-        let configuration = NSImage.SymbolConfiguration(pointSize: font.pointSize, weight: .regular)
+        let symbolPointSize = font.pointSize * 1.2
+        let configuration = NSImage.SymbolConfiguration(pointSize: symbolPointSize, weight: .regular)
         let configuredImage = image.withSymbolConfiguration(configuration) ?? image
         let attachment = NSTextAttachment()
         attachment.image = configuredImage
-        attachment.bounds = NSRect(x: 0, y: -1, width: font.pointSize, height: font.pointSize)
+        attachment.bounds = NSRect(x: 0, y: -2, width: symbolPointSize, height: symbolPointSize)
         result.append(NSAttributedString(attachment: attachment))
     }
 

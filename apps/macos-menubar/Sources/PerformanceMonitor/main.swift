@@ -1,5 +1,4 @@
 import Foundation
-import AppKit
 import SwiftUI
 import PerfmonFFI
 
@@ -40,56 +39,6 @@ final class MonitorModel: ObservableObject {
     }
 }
 
-private final class FixedMenuBarTextField: NSTextField {
-    private static let fixedSize = NSSize(width: 322, height: 18)
-
-    override var intrinsicContentSize: NSSize { Self.fixedSize }
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        configure()
-    }
-
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        configure()
-    }
-
-    private func configure() {
-        isBordered = false
-        isBezeled = false
-        drawsBackground = false
-        isEditable = false
-        isSelectable = false
-        usesSingleLineMode = true
-        lineBreakMode = .byClipping
-        alignment = .left
-        focusRingType = .none
-        font = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-        textColor = .labelColor
-        cell?.wraps = false
-        cell?.truncatesLastVisibleLine = false
-        cell?.isScrollable = false
-        cell?.alignment = .left
-        setContentHuggingPriority(.required, for: .horizontal)
-        setContentCompressionResistancePriority(.required, for: .horizontal)
-    }
-}
-
-private struct FixedMenuBarLabel: NSViewRepresentable {
-    let text: String
-
-    func makeNSView(context: Context) -> FixedMenuBarTextField {
-        let view = FixedMenuBarTextField(frame: NSRect(x: 0, y: 0, width: 322, height: 18))
-        view.stringValue = text
-        return view
-    }
-
-    func updateNSView(_ nsView: FixedMenuBarTextField, context: Context) {
-        nsView.stringValue = text
-    }
-}
-
 @main
 struct PerformanceMonitorApp: App {
     @StateObject private var model = MonitorModel()
@@ -98,37 +47,53 @@ struct PerformanceMonitorApp: App {
         MenuBarExtra {
             Button("Quit") { NSApplication.shared.terminate(nil) }
         } label: {
-            FixedMenuBarLabel(text: menuBarSummary)
+            Text(menuBarSummary)
+                .font(.system(.caption2, design: .monospaced))
                 .frame(width: 322, alignment: .leading)
+                .lineLimit(1)
+                .clipped()
+                .contentTransition(.identity)
+                .animation(nil, value: menuBarSummary)
+                .transaction { transaction in
+                    transaction.animation = nil
+                    transaction.disablesAnimations = true
+                }
         }
     }
 
     private var menuBarSummary: String {
-        "◉\(percentage(model.snapshot.cpu_percent))\u{00A0}"
-            + "▤\(percentage(model.snapshot.memory_percent))\u{00A0}"
-            + "↕\(percentage(model.snapshot.swap_percent))\u{00A0}"
-            + "↓\(compactRate(model.snapshot.rx_bytes_per_sec))\u{00A0}"
-            + "↑\(compactRate(model.snapshot.tx_bytes_per_sec))\u{00A0}"
-            + "◫\(compactRate(model.snapshot.disk_read_bytes_per_sec))/\(compactRate(model.snapshot.disk_write_bytes_per_sec))"
+        "◉\(fixed(percentage(model.snapshot.cpu_percent), width: 4))\u{00A0}"
+            + "▤\(fixed(percentage(model.snapshot.memory_percent), width: 4))\u{00A0}"
+            + "↕\(fixed(percentage(model.snapshot.swap_percent), width: 4))\u{00A0}"
+            + "↓\(fixed(compactRate(model.snapshot.rx_bytes_per_sec), width: 6))\u{00A0}"
+            + "↑\(fixed(compactRate(model.snapshot.tx_bytes_per_sec), width: 6))\u{00A0}"
+            + "◫\(fixed(compactRate(model.snapshot.disk_read_bytes_per_sec), width: 6))/\(fixed(compactRate(model.snapshot.disk_write_bytes_per_sec), width: 6))"
     }
 
     private func compactRate(_ bytes: UInt64) -> String {
         if bytes >= 1_099_511_627_776 {
-            return String(format: "%5.1fT", min(Double(bytes) / 1_099_511_627_776.0, 999.9))
+            return String(format: "%.1fT", Double(bytes) / 1_099_511_627_776.0)
         }
         if bytes >= 1_073_741_824 {
-            return String(format: "%5.1fG", min(Double(bytes) / 1_073_741_824.0, 999.9))
+            return String(format: "%.1fG", Double(bytes) / 1_073_741_824.0)
         }
         if bytes >= 1_048_576 {
-            return String(format: "%5.1fM", min(Double(bytes) / 1_048_576.0, 999.9))
+            return String(format: "%.1fM", Double(bytes) / 1_048_576.0)
         }
         if bytes >= 1_024 {
-            return String(format: "%5.1fK", min(Double(bytes) / 1_024.0, 999.9))
+            return String(format: "%.1fK", Double(bytes) / 1_024.0)
         }
-        return String(format: "%5dB", min(bytes, 99_999))
+        return "\(bytes)B"
     }
 
     private func percentage(_ value: Double) -> String {
-        String(format: "%3.0f%%", min(max(value, 0), 999))
+        String(format: "%.0f%%", value)
+    }
+
+    private func fixed(_ value: String, width: Int) -> String {
+        if value.count >= width {
+            return String(value.prefix(width))
+        }
+        return String(repeating: "\u{00A0}", count: width - value.count) + value
     }
 }

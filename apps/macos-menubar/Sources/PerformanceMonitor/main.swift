@@ -43,7 +43,7 @@ final class MonitorModel: ObservableObject {
 
 @MainActor
 final class PerformanceMonitorDelegate: NSObject, NSApplicationDelegate {
-    private let statusWidth: CGFloat = 540
+    private let statusWidth: CGFloat = 500
     private var statusItem: NSStatusItem?
     private var model: MonitorModel?
 
@@ -100,9 +100,9 @@ final class PerformanceMonitorDelegate: NSObject, NSApplicationDelegate {
         appendSymbol("arrow.triangle.2.circlepath", to: result, font: font)
         appendText(fixed(percentage(snapshot.swap_percent), width: 4) + "\u{00A0}", to: result, attributes: attributes)
         appendSymbol("wifi", to: result, font: font)
-        appendText("↓" + fixed(compactRate(snapshot.rx_bytes_per_sec), width: 6) + " ↑" + fixed(compactRate(snapshot.tx_bytes_per_sec), width: 6) + "\u{00A0}", to: result, attributes: attributes)
+        appendText("↓" + fixed(compactNetworkSpeed(snapshot.rx_bytes_per_sec), width: 6) + " ↑" + fixed(compactNetworkSpeed(snapshot.tx_bytes_per_sec), width: 6) + "\u{00A0}", to: result, attributes: attributes)
         appendSymbol("internaldrive", to: result, font: font)
-        appendText("free " + fixed(compactCapacity(snapshot.disk_available_bytes), width: 5) + " " + fixed(compactRate(snapshot.disk_read_bytes_per_sec), width: 6) + "/" + fixed(compactRate(snapshot.disk_write_bytes_per_sec), width: 6), to: result, attributes: attributes)
+        appendText(fixed(compactCapacity(snapshot.disk_available_bytes), width: 5) + " " + fixed(compactDiskSpeed(snapshot.disk_read_bytes_per_sec), width: 6) + "/" + fixed(compactDiskSpeed(snapshot.disk_write_bytes_per_sec), width: 6), to: result, attributes: attributes)
         return result
     }
 
@@ -123,12 +123,20 @@ final class PerformanceMonitorDelegate: NSObject, NSApplicationDelegate {
         result.append(NSAttributedString(string: text, attributes: attributes))
     }
 
-    private func compactRate(_ bytes: UInt64) -> String {
-        if bytes >= 1_099_511_627_776 { return String(format: "%.1fT", Double(bytes) / 1_099_511_627_776.0) }
+    private func compactNetworkSpeed(_ bytes: UInt64) -> String {
+        let kilobytes = Double(bytes) / 1_024.0
         if bytes >= 1_073_741_824 { return String(format: "%.1fG", Double(bytes) / 1_073_741_824.0) }
         if bytes >= 1_048_576 { return String(format: "%.1fM", Double(bytes) / 1_048_576.0) }
-        if bytes >= 1_024 { return String(format: "%.1fK", Double(bytes) / 1_024.0) }
-        return "\(bytes)B"
+        if bytes >= 102_400 { return String(format: "%.0fK", kilobytes) }
+        return String(format: "%.2fK", kilobytes)
+    }
+
+    private func compactDiskSpeed(_ bytes: UInt64) -> String {
+        let megabytes = Double(bytes) / 1_048_576.0
+        if bytes >= 1_099_511_627_776 { return String(format: "%.1fT", Double(bytes) / 1_099_511_627_776.0) }
+        if bytes >= 1_073_741_824 { return String(format: "%.1fG", Double(bytes) / 1_073_741_824.0) }
+        if bytes >= 104_857_600 { return String(format: "%.0fM", megabytes) }
+        return String(format: "%.2fM", megabytes)
     }
 
     private func compactCapacity(_ bytes: UInt64) -> String {

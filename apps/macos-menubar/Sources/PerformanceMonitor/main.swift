@@ -47,30 +47,20 @@ struct PerformanceMonitorApp: App {
         MenuBarExtra {
             Button("Quit") { NSApplication.shared.terminate(nil) }
         } label: {
-            HStack(spacing: 7) {
-                menuMetric("cpu", value: percentage(model.snapshot.cpu_percent))
-                menuMetric("memorychip", value: percentage(model.snapshot.memory_percent))
-                menuMetric("arrow.up.arrow.down", value: percentage(model.snapshot.swap_percent))
-                menuMetric("arrow.down", value: compactRate(model.snapshot.rx_bytes_per_sec))
-                menuMetric("arrow.up", value: compactRate(model.snapshot.tx_bytes_per_sec))
-                menuMetric(
-                    "internaldrive",
-                    value: compactRate(model.snapshot.disk_read_bytes_per_sec)
-                        + "/"
-                        + compactRate(model.snapshot.disk_write_bytes_per_sec)
-                )
-            }
+            Text(menuBarSummary)
             .font(.caption2)
             .monospacedDigit()
             .fixedSize(horizontal: true, vertical: false)
         }
     }
 
-    private func menuMetric(_ symbol: String, value: String) -> some View {
-        HStack(spacing: 2) {
-            Image(systemName: symbol)
-            Text(value)
-        }
+    private var menuBarSummary: String {
+        "◉ \(percentage(model.snapshot.cpu_percent))  "
+            + "▤ \(percentage(model.snapshot.memory_percent))  "
+            + "↕ \(percentage(model.snapshot.swap_percent))  "
+            + "↓ \(compactRate(model.snapshot.rx_bytes_per_sec))  "
+            + "↑ \(compactRate(model.snapshot.tx_bytes_per_sec))  "
+            + "◫ \(compactRate(model.snapshot.disk_read_bytes_per_sec))/\(compactRate(model.snapshot.disk_write_bytes_per_sec))"
     }
 
     private func compactRate(_ bytes: UInt64) -> String {

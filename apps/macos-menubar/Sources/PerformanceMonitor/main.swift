@@ -62,8 +62,12 @@ final class PerformanceMonitorDelegate: NSObject, NSApplicationDelegate {
 
     private func updateStatusItem() {
         guard let button = statusItem?.button, let snapshot = model?.snapshot else { return }
-        button.font = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        button.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
         button.alignment = .left
+        button.cell?.wraps = false
+        button.cell?.isScrollable = true
+        button.cell?.lineBreakMode = .byClipping
+        button.cell?.truncatesLastVisibleLine = false
         button.title = summary(for: snapshot)
     }
 

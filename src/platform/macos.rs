@@ -1,8 +1,6 @@
 //! macOS implementation backed by Darwin sysctl, getifaddrs and statfs APIs.
 //!
-//! The disk I/O counter is intentionally optional for now. macOS exposes it
-//! through IOKit rather than a procfs-style counter; the interface is ready for
-//! the IOKit collector without making the rest of the monitor platform-aware.
+//! Disk I/O counters are read from the macOS IOKit registry through `ioreg`.
 
 use super::{DiskCounter, DiskSpace, InterfaceCounter, PlatformMonitor};
 use std::collections::HashMap;
@@ -10,6 +8,7 @@ use std::ffi::{CStr, CString};
 use std::io;
 use std::mem::size_of;
 use std::ptr;
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct MacOsMonitor;
@@ -78,19 +77,47 @@ impl PlatformMonitor for MacOsMonitor {
         Some(now.saturating_sub(boot_seconds) as f64)
     }
 
+    #[allow(deprecated)]
     fn cpu_counters(&self) -> Option<(u64, u64)> {
-        let values: [u64; 5] = sysctl_value("kern.cp_time")?;
-        let total: u64 = values.iter().sum();
-        let idle = values[2].saturating_add(values[3]);
+        let mut info = unsafe { std::mem::zeroed::<libc::host_cpu_load_info_data_t>() };
+        let mut count = libc::HOST_CPU_LOAD_INFO_COUNT;
+        let result = unsafe {
+            libc::host_statistics64(
+                libc::mach_host_self(),
+                libc::HOST_CPU_LOAD_INFO,
+                &mut info as *mut _ as *mut libc::integer_t,
+                &mut count,
+            )
+        };
+        if result != 0 {
+            return None;
+        }
+        let ticks = info.cpu_ticks.map(u64::from);
+        let total: u64 = ticks.iter().sum();
+        let idle = ticks[libc::CPU_STATE_IDLE as usize];
         Some((total.saturating_sub(idle), total))
     }
 
+    #[allow(deprecated)]
     fn memory_used_percent(&self) -> Option<f64> {
         let total: u64 = sysctl_value("hw.memsize")?;
         let page_size: u64 = sysctl_value("hw.pagesize")?;
-        let free: u64 = sysctl_value("vm.stats.vm.pages.free")?;
-        let inactive: u64 = sysctl_value("vm.stats.vm.pages.inactive")?;
-        let speculative: u64 = sysctl_value("vm.stats.vm.pages.speculative").unwrap_or(0);
+        let mut info = unsafe { std::mem::zeroed::<libc::vm_statistics64_data_t>() };
+        let mut count = libc::HOST_VM_INFO64_COUNT;
+        let result = unsafe {
+            libc::host_statistics64(
+                libc::mach_host_self(),
+                libc::HOST_VM_INFO64,
+                &mut info as *mut _ as *mut libc::integer_t,
+                &mut count,
+            )
+        };
+        if result != 0 {
+            return None;
+        }
+        let free = u64::from(info.free_count);
+        let inactive = u64::from(info.inactive_count);
+        let speculative = u64::from(info.speculative_count);
         let available = free
             .saturating_add(inactive)
             .saturating_add(speculative)
@@ -132,9 +159,34 @@ impl PlatformMonitor for MacOsMonitor {
     }
 
     fn disk_counters(&self) -> Option<DiskCounter> {
-        // TODO: read per-device bytes from IOKit IOBlockStorageDriver statistics.
-        None
+        let output = Command::new("/usr/sbin/ioreg")
+            .args(["-c", "IOBlockStorageDriver", "-r", "-k", "Statistics", "-w", "0"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        Some(DiskCounter {
+            read_bytes: sum_ioreg_counter(&text, "Bytes (Read)")?,
+            write_bytes: sum_ioreg_counter(&text, "Bytes (Write)")?,
+        })
     }
+}
+
+fn sum_ioreg_counter(text: &str, key: &str) -> Option<u64> {
+    let marker = format!("\"{key}\"=");
+    let mut total = 0_u64;
+    let mut found = false;
+    for value in text.split(&marker).skip(1) {
+        let digits: String = value.chars().take_while(char::is_ascii_digit).collect();
+        if digits.is_empty() {
+            continue;
+        }
+        total = total.saturating_add(digits.parse::<u64>().ok()?);
+        found = true;
+    }
+    found.then_some(total)
 }
 
 #[repr(C)]

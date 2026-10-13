@@ -1,8 +1,8 @@
-# netmon design
+# perfmon design
 
 ## Scope
 
-`netmon` is a Linux-only terminal monitor. It reads kernel counters, converts
+`perfmon` is a cross-platform terminal monitor. It reads platform counters, converts
 counter deltas into rates, and renders the current state with ratatui. The
 program deliberately has no daemon, configuration file, database, or network
 service.
@@ -15,11 +15,12 @@ main()
        ├─ ui()                         render current App state
        ├─ keyboard/mouse events        mutate view state
        └─ App::tick() every 500 ms
-            ├─ /proc/net/dev           interface byte counters
-            ├─ /proc/stat              system CPU counters
-            ├─ /proc/meminfo           memory and swap percentages
-            ├─ /proc/diskstats         system disk sectors
-            ├─ /proc/mounts + statvfs  disk-space usage
+            ├─ PlatformMonitor::network_counters()
+            ├─ PlatformMonitor::cpu_counters()
+            ├─ PlatformMonitor::memory_used_percent()
+            ├─ PlatformMonitor::swap_used_percent()
+            ├─ PlatformMonitor::disk_counters()
+            ├─ PlatformMonitor::disk_space()
             └─ ConnMonitor::sample()   ss sockets and process metrics
                                       └─ async reverse DNS cache
 ```
@@ -28,8 +29,12 @@ The crate is split into four source responsibilities:
 
 - `src/main.rs` owns application state, interface counters, sampling cadence,
   event handling, and process startup.
-- `src/metrics.rs` owns Linux system-counter readers (`/proc`, `/sys`, mounts,
-  and `statvfs`) without owning history or rendering state.
+- `src/platform/mod.rs` defines the platform abstraction and shared counter
+  types without owning history or rendering state.
+- `src/platform/linux.rs` implements the abstraction with procfs/sysfs and
+  statvfs.
+- `src/platform/macos.rs` implements the abstraction with Darwin sysctl,
+  getifaddrs and statfs APIs.
 - `src/conns.rs` owns socket parsing, per-connection rates, process aggregation,
   process resource reads, service lookup, and the connection sampler worker.
 - `src/ui.rs` owns waveform rendering, metric layout, table rendering, sorting,
@@ -103,6 +108,13 @@ across the chart and scrolls once the bounded history is full.
 Terminals shorter than 46 rows automatically show the connection panel in full
 screen mode. This prevents the fixed metric layout from compressing the table
 into an unusable area. The explicit `c` focus toggle uses the same panel layout.
+
+## Native frontends
+
+The Linux and macOS terminal versions call the same Rust abstraction and TUI.
+`crates/perfmon-ffi` exposes a stable C ABI for a SwiftUI macOS menu-bar app;
+fixed-layout snapshots cross the FFI boundary, while Rust retains ownership of
+platform collectors and rate calculation state.
 
 ## Failure handling
 

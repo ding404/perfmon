@@ -245,15 +245,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "netmon"
-version = "0.1.0"
-dependencies = [
- "crossterm",
- "libc",
- "ratatui",
-]
-
-[[package]]
 name = "parking_lot"
 version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -281,6 +272,22 @@ name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
+name = "perfmon"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "libc",
+ "ratatui",
+]
+
+[[package]]
+name = "perfmon-ffi"
+version = "0.1.0"
+dependencies = [
+ "perfmon",
+]
 
 [[package]]
 name = "proc-macro2"

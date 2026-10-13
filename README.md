@@ -1,8 +1,9 @@
-# netmon
+# performance_monitor (`perfmon`)
 
-A tiny terminal network monitor written in Rust. It shows live download and upload
-speed for one network interface, plus system CPU, memory and disk read/write
-throughput, with gauges and sparkline history charts.
+A terminal performance monitor written in Rust. It shows live download and upload
+speed for one network interface, plus system CPU, memory, swap, disk and uptime
+metrics, with gauges and sparkline history charts. Linux and macOS use separate
+platform collectors behind the same `PlatformMonitor` interface.
 
 ```
 ┌ ◉ Network Monitor  │  interface: wlp2s0  │  iface 1/4  │  n/p: iface  │  i: auto-iface  │  r: reset  │  q: quit ┐
@@ -28,27 +29,24 @@ throughput, with gauges and sparkline history charts.
 
 ## How it works
 
-The program reads the kernel counters for the selected interface from
-`/proc/net/dev` twice per second. It computes the byte delta between two samples
-and divides by the measured elapsed time to get bytes per second. Download speed
-comes from the `rx_bytes` field and upload speed from the `tx_bytes` field.
+The program reads cumulative platform counters for the selected interface twice
+per second through `PlatformMonitor`. It computes the byte delta between two
+samples and divides by the measured elapsed time to get bytes per second.
+Download speed comes from the receive counter and upload speed from the transmit
+counter.
 
-System disk throughput is read from `/proc/diskstats`: the program sums the
-cumulative `read_sectors` / `write_sectors` fields across **whole disks** listed in
-`/sys/block` (partitions are excluded to avoid double counting), multiplies the
-sector delta by 512 to get bytes, and divides by the elapsed time. Per-process disk
-read/write rates come from `/proc/<pid>/io` (`read_bytes` / `write_bytes`), again as
-a per-second delta between samples. System CPU% is derived from `/proc/stat` and
-memory % from `/proc/meminfo`.
+Linux disk throughput is read from `/proc/diskstats` and converted from sectors
+to bytes. macOS reserves the equivalent disk counter for its IOKit collector.
+System CPU, memory, swap, disk space and uptime are supplied by each platform's
+native collector.
 
-The default interface is detected from `/proc/net/route`: the program picks the
-interface that owns the default route. If no default route exists, it falls back
-to the first non-loopback interface listed in `/proc/net/dev`.
+The default interface is selected by the platform collector. Linux uses the
+default route and macOS prefers `en0`/`en1`, then falls back to the first
+non-loopback interface.
 
-The program also builds a list of every non-loopback interface in
-`/proc/net/dev`. Press `n` or `p` to move through that list while running. If you
-name an interface on the command line and it is not in the list, the program
-puts it at the front of the list.
+The program also builds a list of every non-loopback interface. Press `n` or `p`
+to move through that list while running. If you name an interface on the command
+line and it is not in the list, the program puts it at the front of the list.
 
 All samples are stored in ring buffers of 172800 entries, which covers 1 day
 (24 hours) at a 0.5-second (2 Hz) tick, for each of the DL, UL, CPU, MEM, SWAP,
@@ -62,25 +60,28 @@ out" until it spans the full day, after which it scrolls as new samples come in.
 Because the line is one dot thick, it stays a thin *hollow* braille curve rather
 than a solid block even when the buffer is full.
 
-This tool is Linux-only because it depends on `/proc/net/dev` and
-`/proc/net/route`.
+The terminal UI is shared by Linux and macOS. Linux reads procfs/sysfs and uses
+`ss` for the connection panel. macOS uses Darwin `sysctl`, `getifaddrs` and
+`statfs` APIs for system metrics. macOS disk I/O and per-process connection
+throughput are optional capabilities and are being implemented through IOKit and
+libproc rather than Linux `/proc` assumptions.
 
 ## Requirements
 
-- Linux
+- Linux or macOS
 - Rust toolchain (edition 2021)
-- `ss` from iproute2 (used to enumerate per-connection / per-process throughput).
+- Linux: `ss` from iproute2 (used to enumerate per-connection / per-process throughput).
 
 ## Build
 
 ```sh
-git clone <repository-url>
-cd network_mornitor
+git clone https://github.com/ding404/perfmon.git
+cd perfmon
 rustup target add x86_64-unknown-linux-musl
 cargo build --release --target x86_64-unknown-linux-musl
 ```
 
-The binary is written to `target/x86_64-unknown-linux-musl/release/netmon`.
+The binary is written to `target/x86_64-unknown-linux-musl/release/perfmon`.
 
 ### Portable (static) build
 
@@ -91,7 +92,7 @@ that runs on x86_64 Linux without depending on the build host's glibc:
 cargo build --release --target x86_64-unknown-linux-musl
 ```
 
-The portable binary is at `target/x86_64-unknown-linux-musl/release/netmon` and is
+The portable binary is at `target/x86_64-unknown-linux-musl/release/perfmon` and is
 statically linked (no glibc dependency). Use this one when deploying to other
 machines.
 
@@ -112,7 +113,7 @@ cargo run --release --target x86_64-unknown-linux-musl -- eth0
 You can also run the built binary directly:
 
 ```sh
-./target/x86_64-unknown-linux-musl/release/netmon wlp2s0
+./target/x86_64-unknown-linux-musl/release/perfmon wlp2s0
 ```
 
 ## Keys
@@ -280,17 +281,18 @@ connection list. Accounts with no lastlog record are omitted.
 ## Project layout
 
 ```
-src/main.rs      application state, interface counters, event loop, startup
-src/metrics.rs   Linux system metric readers from `/proc`, `/sys`, mounts, and
-                 `statvfs`
+src/main.rs      application state, platform-backed event loop, startup
+src/platform/    `PlatformMonitor` plus Linux and macOS implementations
 src/conns.rs     background `ss`/process sampler, connection parsing, and rates
 src/ui.rs        metric waveforms, layout, connection table, and sorting
-Cargo.toml       package manifest (ratatui 0.29, crossterm 0.28)
+crates/perfmon-ffi/ C ABI used by the future SwiftUI menu-bar frontend
+Cargo.toml       workspace manifest (ratatui 0.29, crossterm 0.28)
 ```
 
 ## Limitations
 
-- Linux only (`/proc` filesystem required).
+- The TUI is cross-platform; platform-specific metrics are exposed as optional
+  capabilities so a missing native counter never makes the other metrics fail.
 - One interface at a time; it does not aggregate all interfaces. The interface
   list is read once at start, so a hot-plugged interface does not appear until
   you restart the program.
@@ -299,9 +301,13 @@ Cargo.toml       package manifest (ratatui 0.29, crossterm 0.28)
 - Sparkline scaling is per-window, so the vertical scale changes when traffic
   changes. Compare shapes, not absolute heights.
 - No logging, no export, no configuration file.
-- The Top Connections panel depends on `ss` (iproute2); it shows
+- On Linux, the Top Connections panel depends on `ss` (iproute2); it shows
   `ss unavailable` if `ss` is not installed, and the rest of the program keeps
   running.
+- On macOS, the Top Connections panel is currently unavailable until the native
+  libproc socket collector is added.
+- macOS disk I/O counters are currently reserved for the IOKit implementation;
+  disk-space usage is available through `statfs`.
 - UDP connections have no per-socket throughput rate (the kernel does not track
   cumulative UDP bytes), so their RX/TX columns always read `n/a`.
 - On terminals shorter than 46 rows, the program switches to the connection view

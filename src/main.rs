@@ -1,19 +1,14 @@
 mod conns;
-mod metrics;
+use perfmon::platform::{self, DiskCounter, PlatformMonitor};
 mod ui;
 use conns::ConnMonitor;
 #[cfg(test)]
 use conns::{AggRow, ConnStat, SessionProcess, UserRow, UserSession};
-use metrics::{
-    read_host_uptime, read_sys_disk_sectors, read_system_cpu, read_system_disk_space,
-    read_system_mem_pct, read_system_swap_pct,
-};
 #[cfg(test)]
 use ui::{sort_rows, ConnRow};
 use ui::{ui, SortKey, AGG_SORT_ORDER, DETAIL_SORT_ORDER};
 
 use std::collections::{HashMap, VecDeque};
-use std::fs;
 use std::io;
 use std::time::{Duration, Instant};
 
@@ -84,9 +79,12 @@ const ZEBRA: Color = Color::Rgb(34, 34, 44);
 // ── Application State ───────────────────────────────────────────────────────
 
 struct App {
+    /// Platform-specific counter provider. The TUI only consumes the abstract
+    /// interface, so the same binary can run against Linux or macOS collectors.
+    platform: Box<dyn PlatformMonitor>,
     /// Network interface name (e.g. "eth0", "wlp2s0").
     iface: String,
-    /// All switchable interfaces found in /proc/net/dev (excludes "lo").
+    /// All switchable interfaces found by the platform collector.
     ifaces: Vec<String>,
     /// Index of the active interface inside `ifaces`.
     iface_idx: usize,
@@ -114,12 +112,12 @@ struct App {
     sys_disk_space_avail: u64,
     /// Device path of the largest `/dev` disk (e.g. `/dev/sdd`), for the live label.
     sys_disk_space_dev: String,
-    /// Host uptime in seconds, read from `/proc/uptime`.
+    /// Host uptime in seconds, read from the platform collector.
     host_uptime: f64,
-    /// Previous cumulative disk read sectors (from /proc/diskstats) for the delta.
-    prev_disk_read_sectors: u64,
-    /// Previous cumulative disk write sectors for the delta.
-    prev_disk_write_sectors: u64,
+    /// Previous cumulative disk read bytes for the delta.
+    prev_disk_read_bytes: u64,
+    /// Previous cumulative disk write bytes for the delta.
+    prev_disk_write_bytes: u64,
     /// Time of the previous disk-stat sample.
     prev_disk_time: Instant,
     /// Previous aggregate busy-ticks from /proc/stat (for the CPU% delta).
@@ -177,8 +175,14 @@ struct App {
 }
 
 impl App {
-    fn new(iface: String, ifaces: Vec<String>, iface_idx: usize) -> Self {
+    fn new(
+        platform: Box<dyn PlatformMonitor>,
+        iface: String,
+        ifaces: Vec<String>,
+        iface_idx: usize,
+    ) -> Self {
         Self {
+            platform,
             iface,
             ifaces,
             iface_idx,
@@ -195,8 +199,8 @@ impl App {
             sys_disk_space_avail: 0,
             sys_disk_space_dev: String::new(),
             host_uptime: 0.0,
-            prev_disk_read_sectors: 0,
-            prev_disk_write_sectors: 0,
+            prev_disk_read_bytes: 0,
+            prev_disk_write_bytes: 0,
             prev_disk_time: Instant::now(),
             prev_cpu_busy: 0,
             prev_cpu_total: 0,
@@ -224,56 +228,6 @@ impl App {
             header_y: 0,
             col_hit: Vec::new(),
         }
-    }
-
-    /// Read raw (rx_bytes, tx_bytes) from /proc/net/dev for the configured interface.
-    fn read_counters(&self) -> io::Result<(u64, u64)> {
-        let content = fs::read_to_string("/proc/net/dev")?;
-        for line in content.lines().skip(2) {
-            let line = line.trim();
-            if let Some(rest) = line.strip_prefix(&format!("{}:", self.iface)) {
-                let fields: Vec<&str> = rest.split_whitespace().collect();
-                if fields.len() >= 9 {
-                    let rx: u64 = fields[0]
-                        .parse()
-                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                    let tx: u64 = fields[8]
-                        .parse()
-                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                    return Ok((rx, tx));
-                }
-            }
-        }
-        Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("interface '{}' not found in /proc/net/dev", self.iface),
-        ))
-    }
-
-    /// Read raw (rx_bytes, tx_bytes) for *every* interface from /proc/net/dev.
-    fn read_all_counters(&self) -> io::Result<HashMap<String, (u64, u64)>> {
-        let content = fs::read_to_string("/proc/net/dev")?;
-        let mut map = HashMap::new();
-        for line in content.lines().skip(2) {
-            let line = line.trim();
-            if let Some(colon) = line.find(':') {
-                let iface = line[..colon].trim().to_string();
-                let rest = &line[colon + 1..];
-                let fields: Vec<&str> = rest.split_whitespace().collect();
-                if fields.len() >= 9 {
-                    let rx: u64 = match fields[0].parse() {
-                        Ok(value) => value,
-                        Err(_) => continue,
-                    };
-                    let tx: u64 = match fields[8].parse() {
-                        Ok(value) => value,
-                        Err(_) => continue,
-                    };
-                    map.insert(iface, (rx, tx));
-                }
-            }
-        }
-        Ok(map)
     }
 
     /// Return the interface (from the known list) with the most traffic accumulated
@@ -322,14 +276,16 @@ impl App {
     /// that window elapses.
     fn tick(&mut self) -> io::Result<()> {
         let now = Instant::now();
-        let counters = self.read_all_counters()?;
+        let counters = self.platform.network_counters()?;
         let elapsed = now.duration_since(self.last_sample).as_secs_f64();
         let ifaces = self.ifaces.clone();
 
         // Compute each interface's byte delta this tick; feed it to the 1-second
         // judging window and derive the active interface's instantaneous rate.
         for iface in &ifaces {
-            if let Some(&(rx, tx)) = counters.get(iface) {
+            if let Some(counter) = counters.get(iface) {
+                let rx = counter.rx_bytes;
+                let tx = counter.tx_bytes;
                 let previous = self.prev_counters.get(iface).copied();
                 // Guard against the first sample (no baseline yet) to avoid counting
                 // all traffic since boot as a single delta.
@@ -383,14 +339,14 @@ impl App {
 
         self.last_sample = now;
 
-        if let Some(uptime) = read_host_uptime() {
+        if let Some(uptime) = self.platform.host_uptime_seconds() {
             self.host_uptime = uptime.max(0.0);
         }
 
         // Sample system-wide CPU and memory usage so their histories can be drawn
         // as waveforms below the DL/UL sparklines. Both are sampled every tick
         // (~2 Hz) to stay in sync with the traffic history.
-        if let Some((busy, total)) = read_system_cpu() {
+        if let Some((busy, total)) = self.platform.cpu_counters() {
             if self.prev_cpu_total > 0 && total > self.prev_cpu_total {
                 let dt = now.duration_since(self.prev_cpu_time).as_secs_f64();
                 let d_busy = busy.saturating_sub(self.prev_cpu_busy) as f64;
@@ -413,7 +369,7 @@ impl App {
             self.sys_cpu_history.pop_front();
         }
 
-        if let Some(pct) = read_system_mem_pct() {
+        if let Some(pct) = self.platform.memory_used_percent() {
             self.sys_mem_history.push_back(pct.clamp(0.0, 100.0));
         } else {
             self.sys_mem_history.push_back(0.0);
@@ -422,7 +378,7 @@ impl App {
             self.sys_mem_history.pop_front();
         }
 
-        if let Some(pct) = read_system_swap_pct() {
+        if let Some(pct) = self.platform.swap_used_percent() {
             self.sys_swap_history.push_back(pct.clamp(0.0, 100.0));
         } else {
             self.sys_swap_history.push_back(0.0);
@@ -434,12 +390,13 @@ impl App {
         // System disk space usage: largest `/dev` disk. Percentage used goes to
         // the history; total/used/avail bytes and the device path are kept for
         // the live label.
-        if let Some((pct, total, used, avail, dev)) = read_system_disk_space() {
-            self.sys_disk_space_history.push_back(pct.clamp(0.0, 100.0));
-            self.sys_disk_space_total = total;
-            self.sys_disk_space_used = used;
-            self.sys_disk_space_avail = avail;
-            self.sys_disk_space_dev = dev;
+        if let Some(space) = self.platform.disk_space() {
+            self.sys_disk_space_history
+                .push_back(space.used_percent.clamp(0.0, 100.0));
+            self.sys_disk_space_total = space.total_bytes;
+            self.sys_disk_space_used = space.used_bytes;
+            self.sys_disk_space_avail = space.available_bytes;
+            self.sys_disk_space_dev = space.device;
         } else {
             self.sys_disk_space_history.push_back(0.0);
         }
@@ -447,17 +404,21 @@ impl App {
             self.sys_disk_space_history.pop_front();
         }
 
-        // System disk read/write throughput (bytes/s). Sectors are 512 bytes; we sum
-        // the cumulative counters and divide by the elapsed time between ticks.
-        if let Some((rsec, wsec)) = read_sys_disk_sectors() {
-            if self.prev_disk_read_sectors > 0
-                && rsec >= self.prev_disk_read_sectors
-                && wsec >= self.prev_disk_write_sectors
+        // System disk read/write throughput (bytes/s). Platform collectors return
+        // cumulative bytes and the shared sampling layer computes the delta.
+        if let Some(DiskCounter {
+            read_bytes,
+            write_bytes,
+        }) = self.platform.disk_counters()
+        {
+            if self.prev_disk_read_bytes > 0
+                && read_bytes >= self.prev_disk_read_bytes
+                && write_bytes >= self.prev_disk_write_bytes
             {
                 let dt = now.duration_since(self.prev_disk_time).as_secs_f64();
                 if dt > 0.0 {
-                    let dr = (rsec - self.prev_disk_read_sectors) as f64 * 512.0 / dt;
-                    let dw = (wsec - self.prev_disk_write_sectors) as f64 * 512.0 / dt;
+                    let dr = (read_bytes - self.prev_disk_read_bytes) as f64 / dt;
+                    let dw = (write_bytes - self.prev_disk_write_bytes) as f64 / dt;
                     self.sys_disk_read_history.push_back(dr);
                     self.sys_disk_write_history.push_back(dw);
                 } else {
@@ -469,9 +430,12 @@ impl App {
                 self.sys_disk_read_history.push_back(0.0);
                 self.sys_disk_write_history.push_back(0.0);
             }
-            self.prev_disk_read_sectors = rsec;
-            self.prev_disk_write_sectors = wsec;
+            self.prev_disk_read_bytes = read_bytes;
+            self.prev_disk_write_bytes = write_bytes;
             self.prev_disk_time = now;
+        } else {
+            self.sys_disk_read_history.push_back(0.0);
+            self.sys_disk_write_history.push_back(0.0);
         }
         if self.sys_disk_read_history.len() > MAX_HISTORY {
             self.sys_disk_read_history.pop_front();
@@ -502,8 +466,11 @@ impl App {
         self.reset_metric_state();
 
         // Re-baseline counters immediately; skip the delta on the next tick.
-        if let Ok((rx, tx)) = self.read_counters() {
-            self.prev_counters.insert(self.iface.clone(), (rx, tx));
+        if let Ok(counters) = self.platform.network_counters() {
+            if let Some(counter) = counters.get(&self.iface) {
+                self.prev_counters
+                    .insert(self.iface.clone(), (counter.rx_bytes, counter.tx_bytes));
+            }
         } else {
             self.prev_counters.insert(self.iface.clone(), (0, 0));
         }
@@ -522,8 +489,8 @@ impl App {
         self.sys_disk_read_history.clear();
         self.sys_disk_write_history.clear();
         self.sys_disk_space_history.clear();
-        self.prev_disk_read_sectors = 0;
-        self.prev_disk_write_sectors = 0;
+        self.prev_disk_read_bytes = 0;
+        self.prev_disk_write_bytes = 0;
         self.prev_disk_time = Instant::now();
         self.prev_cpu_busy = 0;
         self.prev_cpu_total = 0;
@@ -551,56 +518,6 @@ impl App {
 fn sparkline_max_f(history: &VecDeque<f64>) -> f64 {
     let max = history.iter().copied().fold(1.0_f64, f64::max);
     max * 1.1 + 1.0
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-/// Auto-detect the default network interface by reading /proc/net/route.
-fn detect_interface() -> io::Result<String> {
-    let content = fs::read_to_string("/proc/net/route")?;
-    for line in content.lines().skip(1) {
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        if fields.len() >= 8 && fields[1] == "00000000" && fields[7] == "00000000" {
-            return Ok(fields[0].to_string());
-        }
-    }
-    // Fallback: pick the first non-lo interface from /proc/net/dev.
-    let dev = fs::read_to_string("/proc/net/dev")?;
-    for line in dev.lines().skip(2) {
-        let line = line.trim();
-        if let Some(idx) = line.find(':') {
-            let iface = line[..idx].trim();
-            if iface != "lo" {
-                return Ok(iface.to_string());
-            }
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::NotFound,
-        "no non-loopback network interface found",
-    ))
-}
-
-/// List every non-loopback interface present in /proc/net/dev, in file order.
-fn list_interfaces() -> io::Result<Vec<String>> {
-    let content = fs::read_to_string("/proc/net/dev")?;
-    let mut names = Vec::new();
-    for line in content.lines().skip(2) {
-        let line = line.trim();
-        if let Some(idx) = line.find(':') {
-            let name = line[..idx].trim();
-            if !name.is_empty() && name != "lo" {
-                names.push(name.to_string());
-            }
-        }
-    }
-    if names.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "no non-loopback network interface found",
-        ));
-    }
-    Ok(names)
 }
 
 /// Format bytes/s into a human-readable string.
@@ -690,19 +607,23 @@ fn move_user_cursor(app: &mut App, delta: isize) {
 // ── Main ────────────────────────────────────────────────────────────────────
 
 fn main() -> io::Result<()> {
+    let platform = platform::current();
+
     // Detect the default network interface.
-    let iface = detect_interface().unwrap_or_else(|e| {
+    let iface = platform.default_interface().unwrap_or_else(|e| {
         eprintln!("Error detecting network interface: {}", e);
-        eprintln!("Hint: pass an interface name as argument, e.g.: netmon eth0");
+        eprintln!("Hint: pass an interface name as argument, e.g.: perfmon en0");
         std::process::exit(1);
     });
 
-    // Allow CLI override: `netmon eth0`
+    // Allow CLI override: `perfmon en0`
     let iface = std::env::args().nth(1).unwrap_or(iface);
 
     // Build the switchable interface list. The requested interface stays first-class
     // even if it is not in the list (e.g. an explicit "lo").
-    let mut ifaces = list_interfaces().unwrap_or_else(|_| vec![iface.clone()]);
+    let mut ifaces = platform
+        .interfaces()
+        .unwrap_or_else(|_| vec![iface.clone()]);
     let iface_idx = match ifaces.iter().position(|n| n == &iface) {
         Some(i) => i,
         None => {
@@ -711,12 +632,15 @@ fn main() -> io::Result<()> {
         }
     };
 
-    let mut app = App::new(iface, ifaces, iface_idx);
+    let mut app = App::new(platform, iface, ifaces, iface_idx);
 
     // Initialise counters with the first read so tick() can compute a delta.
-    match app.read_counters() {
-        Ok((rx, tx)) => {
-            app.prev_counters.insert(app.iface.clone(), (rx, tx));
+    match app.platform.network_counters() {
+        Ok(counters) => {
+            if let Some(counter) = counters.get(&app.iface) {
+                app.prev_counters
+                    .insert(app.iface.clone(), (counter.rx_bytes, counter.tx_bytes));
+            }
             app.last_sample = Instant::now();
         }
         Err(e) => {
@@ -942,7 +866,12 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     fn sample_app() -> App {
-        let mut app = App::new("dummy0".to_string(), vec!["dummy0".to_string()], 0);
+        let mut app = App::new(
+            platform::current(),
+            "dummy0".to_string(),
+            vec!["dummy0".to_string()],
+            0,
+        );
         app.conns.last = vec![
             ConnStat {
                 proto: "tcp".into(),

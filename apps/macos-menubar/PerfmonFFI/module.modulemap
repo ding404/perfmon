@@ -1,0 +1,4 @@
+module PerfmonFFI [system] {
+    header "../../../crates/perfmon-ffi/include/perfmon.h"
+    export *
+}

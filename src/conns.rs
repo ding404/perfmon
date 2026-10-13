@@ -1332,14 +1332,7 @@ fn reverse_lookup(ip: IpAddr) -> Option<String> {
         let mut ss: libc::sockaddr_storage = std::mem::zeroed();
         match sa {
             SocketAddr::V4(v4) => {
-                let sin = libc::sockaddr_in {
-                    sin_family: libc::AF_INET as u16,
-                    sin_port: 0,
-                    sin_addr: libc::in_addr {
-                        s_addr: u32::from(*v4.ip()).to_be(),
-                    },
-                    sin_zero: [0; 8],
-                };
+                let sin = sockaddr_v4(v4.ip());
                 let p = &mut ss as *mut _ as *mut libc::sockaddr_in;
                 *p = sin;
                 (
@@ -1348,15 +1341,7 @@ fn reverse_lookup(ip: IpAddr) -> Option<String> {
                 )
             }
             SocketAddr::V6(v6) => {
-                let sin6 = libc::sockaddr_in6 {
-                    sin6_family: libc::AF_INET6 as u16,
-                    sin6_port: 0,
-                    sin6_flowinfo: 0,
-                    sin6_addr: libc::in6_addr {
-                        s6_addr: v6.ip().octets(),
-                    },
-                    sin6_scope_id: 0,
-                };
+                let sin6 = sockaddr_v6(v6.ip());
                 let p = &mut ss as *mut _ as *mut libc::sockaddr_in6;
                 *p = sin6;
                 (
@@ -1388,6 +1373,58 @@ fn reverse_lookup(ip: IpAddr) -> Option<String> {
         .map(|&c| c as u8)
         .collect();
     String::from_utf8(bytes).ok()
+}
+
+#[cfg(target_os = "macos")]
+fn sockaddr_v4(ip: &std::net::Ipv4Addr) -> libc::sockaddr_in {
+    libc::sockaddr_in {
+        sin_len: std::mem::size_of::<libc::sockaddr_in>() as u8,
+        sin_family: libc::AF_INET as u8,
+        sin_port: 0,
+        sin_addr: libc::in_addr {
+            s_addr: u32::from(*ip).to_be(),
+        },
+        sin_zero: [0; 8],
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn sockaddr_v4(ip: &std::net::Ipv4Addr) -> libc::sockaddr_in {
+    libc::sockaddr_in {
+        sin_family: libc::AF_INET as u16,
+        sin_port: 0,
+        sin_addr: libc::in_addr {
+            s_addr: u32::from(*ip).to_be(),
+        },
+        sin_zero: [0; 8],
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn sockaddr_v6(ip: &std::net::Ipv6Addr) -> libc::sockaddr_in6 {
+    libc::sockaddr_in6 {
+        sin6_len: std::mem::size_of::<libc::sockaddr_in6>() as u8,
+        sin6_family: libc::AF_INET6 as u8,
+        sin6_port: 0,
+        sin6_flowinfo: 0,
+        sin6_addr: libc::in6_addr {
+            s6_addr: ip.octets(),
+        },
+        sin6_scope_id: 0,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn sockaddr_v6(ip: &std::net::Ipv6Addr) -> libc::sockaddr_in6 {
+    libc::sockaddr_in6 {
+        sin6_family: libc::AF_INET6 as u16,
+        sin6_port: 0,
+        sin6_flowinfo: 0,
+        sin6_addr: libc::in6_addr {
+            s6_addr: ip.octets(),
+        },
+        sin6_scope_id: 0,
+    }
 }
 
 impl ConnSampler {

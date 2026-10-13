@@ -1,7 +1,11 @@
 [package]
-name = "netmon"
+name = "perfmon"
 version = "0.1.0"
 edition = "2021"
+
+[workspace]
+members = ["crates/perfmon-ffi"]
+resolver = "2"
 
 [dependencies]
 ratatui = { version = "0.29", features = ["crossterm"] }

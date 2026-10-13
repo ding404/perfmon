@@ -18,6 +18,7 @@ pub struct PerfmonSnapshot {
     pub tx_bytes_per_sec: u64,
     pub disk_read_bytes_per_sec: u64,
     pub disk_write_bytes_per_sec: u64,
+    pub disk_available_bytes: u64,
     pub uptime_seconds: f64,
     pub valid: u8,
 }
@@ -104,6 +105,11 @@ pub unsafe extern "C" fn perfmon_sample(
             )
         })
         .unwrap_or_default();
+    let disk_available_bytes = handle
+        .monitor
+        .disk_space()
+        .map(|space| space.available_bytes)
+        .unwrap_or_default();
 
     *out = PerfmonSnapshot {
         cpu_percent,
@@ -113,6 +119,7 @@ pub unsafe extern "C" fn perfmon_sample(
         tx_bytes_per_sec,
         disk_read_bytes_per_sec,
         disk_write_bytes_per_sec,
+        disk_available_bytes,
         uptime_seconds: handle.monitor.host_uptime_seconds().unwrap_or(0.0),
         valid: 1,
     };

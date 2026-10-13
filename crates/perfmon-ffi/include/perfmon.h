@@ -11,6 +11,7 @@ typedef struct PerfmonSnapshot {
     uint64_t tx_bytes_per_sec;
     uint64_t disk_read_bytes_per_sec;
     uint64_t disk_write_bytes_per_sec;
+    uint64_t disk_available_bytes;
     double uptime_seconds;
     uint8_t valid;
 } PerfmonSnapshot;

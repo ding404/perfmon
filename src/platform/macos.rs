@@ -1,6 +1,6 @@
 //! macOS implementation backed by Darwin sysctl, getifaddrs and statfs APIs.
 //!
-//! Disk I/O counters are read from the macOS IOKit registry through `ioreg`.
+//! Disk I/O counters are read directly from the macOS IOKit registry.
 
 use super::{DiskCounter, DiskSpace, InterfaceCounter, PlatformMonitor};
 use std::collections::HashMap;
@@ -8,8 +8,42 @@ use std::ffi::{CStr, CString};
 use std::io;
 use std::mem::size_of;
 use std::ptr;
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+const MAC_PROCESS_NAME_MAX: usize = 64;
+const MAC_ENDPOINT_MAX: usize = 128;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct MacConnectionRaw {
+    pid: i32,
+    uid: u32,
+    protocol: u8,
+    state: u8,
+    reserved: u16,
+    socket_id: u64,
+    comm: [libc::c_char; MAC_PROCESS_NAME_MAX],
+    local: [libc::c_char; MAC_ENDPOINT_MAX],
+    remote: [libc::c_char; MAC_ENDPOINT_MAX],
+}
+
+extern "C" {
+    fn perfmon_macos_disk_counters(read_bytes: *mut u64, write_bytes: *mut u64) -> i32;
+    fn perfmon_macos_list_connections(
+        output: *mut MacConnectionRaw,
+        capacity: i32,
+    ) -> i32;
+}
+
+#[derive(Clone, Debug)]
+pub struct ProcessConnection {
+    pub pid: u32,
+    pub uid: u32,
+    pub protocol: String,
+    pub comm: String,
+    pub local: String,
+    pub remote: String,
+}
 
 pub struct MacOsMonitor;
 
@@ -159,34 +193,58 @@ impl PlatformMonitor for MacOsMonitor {
     }
 
     fn disk_counters(&self) -> Option<DiskCounter> {
-        let output = Command::new("/usr/sbin/ioreg")
-            .args(["-c", "IOBlockStorageDriver", "-r", "-k", "Statistics", "-w", "0"])
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        let text = String::from_utf8_lossy(&output.stdout);
-        Some(DiskCounter {
-            read_bytes: sum_ioreg_counter(&text, "Bytes (Read)")?,
-            write_bytes: sum_ioreg_counter(&text, "Bytes (Write)")?,
+        let mut read_bytes = 0;
+        let mut write_bytes = 0;
+        let result = unsafe { perfmon_macos_disk_counters(&mut read_bytes, &mut write_bytes) };
+        (result == 0).then_some(DiskCounter {
+            read_bytes,
+            write_bytes,
         })
     }
 }
 
-fn sum_ioreg_counter(text: &str, key: &str) -> Option<u64> {
-    let marker = format!("\"{key}\"=");
-    let mut total = 0_u64;
-    let mut found = false;
-    for value in text.split(&marker).skip(1) {
-        let digits: String = value.chars().take_while(char::is_ascii_digit).collect();
-        if digits.is_empty() {
-            continue;
-        }
-        total = total.saturating_add(digits.parse::<u64>().ok()?);
-        found = true;
+pub fn process_connections() -> io::Result<Vec<ProcessConnection>> {
+    let mut raw = vec![MacConnectionRaw {
+        pid: 0,
+        uid: 0,
+        protocol: 0,
+        state: 0,
+        reserved: 0,
+        socket_id: 0,
+        comm: [0; MAC_PROCESS_NAME_MAX],
+        local: [0; MAC_ENDPOINT_MAX],
+        remote: [0; MAC_ENDPOINT_MAX],
+    }; 8192];
+    let count = unsafe { perfmon_macos_list_connections(raw.as_mut_ptr(), raw.len() as i32) };
+    if count < 0 {
+        return Err(io::Error::last_os_error());
     }
-    found.then_some(total)
+
+    raw.truncate((count as usize).min(raw.len()));
+    Ok(raw
+        .into_iter()
+        .filter_map(|connection| {
+            let protocol = match connection.protocol as i32 {
+                libc::IPPROTO_TCP => "tcp",
+                libc::IPPROTO_UDP => "udp",
+                _ => return None,
+            };
+            Some(ProcessConnection {
+                pid: connection.pid as u32,
+                uid: connection.uid,
+                protocol: protocol.to_string(),
+                comm: c_string(&connection.comm),
+                local: c_string(&connection.local),
+                remote: c_string(&connection.remote),
+            })
+        })
+        .collect())
+}
+
+fn c_string(buffer: &[libc::c_char]) -> String {
+    unsafe { CStr::from_ptr(buffer.as_ptr()) }
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[repr(C)]

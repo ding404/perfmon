@@ -12,6 +12,9 @@ mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 
+#[cfg(target_os = "macos")]
+pub use macos::{process_connections, ProcessConnection};
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct InterfaceCounter {
     pub rx_bytes: u64,

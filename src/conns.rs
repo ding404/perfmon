@@ -1,11 +1,11 @@
-//! Per-connection / per-process network throughput via `ss`.
+//! Per-connection / per-process network monitoring.
 //!
-//! We sample the output of `ss -tunpi` once per tick. For TCP sockets the
-//! detail line carries `bytes_received:` / `bytes_sent:` (cumulative counters
-//! from the kernel's `tcp_info`), so we can compute a per-second rate from the
-//! delta between two samples. UDP sockets are connectionless and the kernel
-//! does not maintain cumulative per-socket byte counters, so their rate is
-//! always `None` (rendered as `n/a`).
+//! Linux samples `ss -tunpi` and uses TCP cumulative counters for rates. macOS
+//! enumerates process-owned TCP/UDP sockets through `libproc`; libproc exposes
+//! ownership and endpoints but not cumulative per-socket byte counters, so
+//! macOS connection rates remain `n/a`.
+
+#![cfg_attr(target_os = "macos", allow(dead_code))]
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::CStr;
@@ -16,6 +16,9 @@ use std::process::Command;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Instant;
+
+#[cfg(target_os = "macos")]
+use crate::platform;
 
 /// One currently logged-in user session read from utmp.
 #[derive(Clone)]
@@ -361,6 +364,7 @@ impl ConnSampler {
     /// Run `ss`, parse it, compute per-connection rates and store the sorted
     /// result in `self.last`. Errors are swallowed at the worker boundary: on
     /// failure `available` is set to `false` and the list is cleared.
+    #[cfg(target_os = "linux")]
     fn sample(&mut self) -> io::Result<()> {
         let now = Instant::now();
         if self
@@ -524,6 +528,84 @@ impl ConnSampler {
             }
         });
 
+        self.last = conns;
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sample(&mut self) -> io::Result<()> {
+        let now = Instant::now();
+
+        while let Ok((ip, host)) = self.rx.try_recv() {
+            self.host_cache.insert(ip, host);
+            self.pending.remove(&ip);
+        }
+
+        let connections = platform::process_connections()?;
+        let mut conns = Vec::with_capacity(connections.len());
+        let mut seen = HashSet::new();
+        let mut new_procs = HashMap::new();
+
+        for connection in connections {
+            let key = (
+                connection.protocol.clone(),
+                connection.local.clone(),
+                connection.remote.clone(),
+                connection.pid,
+            );
+            if !seen.insert(key) {
+                continue;
+            }
+
+            let remote_endpoint = parse_endpoint(&connection.remote);
+            let service = remote_endpoint
+                .and_then(|(_, port)| self.lookup_service(port, &connection.protocol));
+            let host = remote_endpoint.and_then(|(ip, _)| {
+                if let Some(cached) = self.host_cache.get(&ip) {
+                    return cached.clone();
+                }
+                if self.pending.insert(ip) {
+                    let tx = self.tx.clone();
+                    thread::spawn(move || {
+                        let resolved = reverse_lookup(ip);
+                        let _ = tx.send((ip, resolved));
+                    });
+                }
+                None
+            });
+
+            new_procs.entry(connection.pid).or_insert_with(|| ProcInfo {
+                user: self.resolve_user(connection.uid),
+                cpu_pct: 0.0,
+                mem_pct: 0.0,
+                time_secs: 0.0,
+                disk_read_rate: 0.0,
+                disk_write_rate: 0.0,
+            });
+
+            conns.push(ConnStat {
+                proto: connection.protocol,
+                local: connection.local,
+                remote: connection.remote,
+                comm: connection.comm,
+                pid: Some(connection.pid),
+                // libproc identifies socket ownership and endpoints, but does
+                // not expose cumulative per-socket byte counters. Keep rates
+                // unavailable instead of presenting socket-buffer occupancy as
+                // network throughput.
+                rx_rate: None,
+                tx_rate: None,
+                host,
+                service,
+            });
+        }
+
+        self.procs = new_procs;
+        self.prev.clear();
+        self.last_users_refresh = Some(now);
+        self.users.clear();
+        self.available = true;
+        conns.sort_by(|a, b| a.comm.cmp(&b.comm).then_with(|| a.pid.cmp(&b.pid)));
         self.last = conns;
         Ok(())
     }

@@ -994,7 +994,11 @@ fn render_conn_panel(f: &mut Frame, area: Rect, app: &mut App) {
     let block = Block::default().borders(Borders::ALL).title(title);
 
     if !app.conns.available {
-        let msg = Paragraph::new(" ss unavailable — install iproute2's `ss` ").block(block);
+        #[cfg(target_os = "macos")]
+        let hint = " libproc unavailable — process connection access was denied ";
+        #[cfg(not(target_os = "macos"))]
+        let hint = " ss unavailable — install iproute2's `ss` ";
+        let msg = Paragraph::new(hint).block(block);
         f.render_widget(msg, area);
         return;
     }

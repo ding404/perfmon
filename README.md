@@ -62,9 +62,11 @@ than a solid block even when the buffer is full.
 
 The terminal UI is shared by Linux and macOS. Linux reads procfs/sysfs and uses
 `ss` for the connection panel. macOS uses Darwin `sysctl`, `getifaddrs` and
-`statfs` APIs for system metrics. macOS disk I/O and per-process connection
-throughput are optional capabilities and are being implemented through IOKit and
-libproc rather than Linux `/proc` assumptions.
+`statfs` APIs for system metrics, direct IOKit cumulative block-device counters
+for disk I/O, and `libproc` to enumerate process-owned TCP/UDP sockets. Since
+`libproc` does not expose cumulative per-socket byte counters, macOS shows the
+owning process and endpoints while per-connection RX/TX throughput remains
+`n/a`.
 
 ## Requirements
 
@@ -283,7 +285,7 @@ connection list. Accounts with no lastlog record are omitted.
 ```
 src/main.rs      application state, platform-backed event loop, startup
 src/platform/    `PlatformMonitor` plus Linux and macOS implementations
-src/conns.rs     background `ss`/process sampler, connection parsing, and rates
+src/conns.rs     background Linux `ss` / macOS `libproc` connection sampler
 src/ui.rs        metric waveforms, layout, connection table, and sorting
 crates/perfmon-ffi/ C ABI used by the future SwiftUI menu-bar frontend
 Cargo.toml       workspace manifest (ratatui 0.29, crossterm 0.28)
@@ -304,10 +306,11 @@ Cargo.toml       workspace manifest (ratatui 0.29, crossterm 0.28)
 - On Linux, the Top Connections panel depends on `ss` (iproute2); it shows
   `ss unavailable` if `ss` is not installed, and the rest of the program keeps
   running.
-- On macOS, the Top Connections panel is currently unavailable until the native
-  libproc socket collector is added.
-- macOS disk I/O counters are currently reserved for the IOKit implementation;
-  disk-space usage is available through `statfs`.
+- On macOS, the Top Connections panel uses `libproc` to show process-owned
+  sockets and endpoints. `libproc` does not expose per-socket byte counters, so
+  its RX/TX columns are `n/a`.
+- macOS disk I/O uses direct IOKit cumulative block-device counters; disk-space
+  usage is available through `statfs`.
 - UDP connections have no per-socket throughput rate (the kernel does not track
   cumulative UDP bytes), so their RX/TX columns always read `n/a`.
 - On terminals shorter than 46 rows, the program switches to the connection view

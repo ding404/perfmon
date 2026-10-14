@@ -64,9 +64,11 @@ The terminal UI is shared by Linux and macOS. Linux reads procfs/sysfs and uses
 `ss` for the connection panel. macOS uses Darwin `sysctl`, `getifaddrs` and
 `statfs` APIs for system metrics, direct IOKit cumulative block-device counters
 for disk I/O, and `libproc` to enumerate process-owned TCP/UDP sockets. Since
-`libproc` does not expose cumulative per-socket byte counters, macOS shows the
-owning process and endpoints while per-connection RX/TX throughput remains
-`n/a`.
+`libproc` does not expose cumulative per-socket byte counters, macOS combines
+the socket ownership/endpoints from `libproc` with process-level cumulative
+byte counters from `nettop -P`. The macOS connection columns are labelled
+`P-RX`/`P-TX` to make clear that the rate belongs to the owning process and is
+not an exact per-socket rate; the aggregate view counts it once per process.
 
 ## Requirements
 
@@ -181,7 +183,7 @@ are using the most bandwidth, sorted by total (RX + TX) throughput:
 
 ```
 ├ Top Connections (by throughput)  ↑/↓:scroll ──────────────────────────────────┤
-│ PROC(PID)      PRO  SRC             DST             HOST       SVC    RX      TX │
+│ PROC(PID)      PRO  SRC             DST             HOST       SVC    P-RX    P-TX │
 │ node(26951)    tcp  127.0.0.1:51641 127.0.0.1:10808 localhost  -      6.1 KB/s 2.0 KB/s │
 │ sshd(882)      tcp  10.0.0.2:22     10.0.0.9:55123  9.9.9.9    ssh    12.0 KB/s 4.0 KB/s │
 │ resolver(1031) udp  127.0.0.53:53   8.8.8.8:53      dns.google domain n/a     n/a      │
@@ -285,7 +287,7 @@ connection list. Accounts with no lastlog record are omitted.
 ```
 src/main.rs      application state, platform-backed event loop, startup
 src/platform/    `PlatformMonitor` plus Linux and macOS implementations
-src/conns.rs     background Linux `ss` / macOS `libproc` connection sampler
+src/conns.rs     background Linux `ss` / macOS `libproc` + `nettop` sampler
 src/ui.rs        metric waveforms, layout, connection table, and sorting
 crates/perfmon-ffi/ C ABI used by the future SwiftUI menu-bar frontend
 Cargo.toml       workspace manifest (ratatui 0.29, crossterm 0.28)
@@ -307,12 +309,14 @@ Cargo.toml       workspace manifest (ratatui 0.29, crossterm 0.28)
   `ss unavailable` if `ss` is not installed, and the rest of the program keeps
   running.
 - On macOS, the Top Connections panel uses `libproc` to show process-owned
-  sockets and endpoints. `libproc` does not expose per-socket byte counters, so
-  its RX/TX columns are `n/a`.
+  sockets and endpoints, and `nettop -P` to obtain process-level byte counters.
+  Its `P-RX`/`P-TX` columns are the owning process's rates, not exact
+  per-socket rates.
 - macOS disk I/O uses direct IOKit cumulative block-device counters; disk-space
   usage is available through `statfs`.
-- UDP connections have no per-socket throughput rate (the kernel does not track
-  cumulative UDP bytes), so their RX/TX columns always read `n/a`.
+- Linux UDP connections have no per-socket throughput rate (the kernel does not
+  track cumulative UDP bytes), so their RX/TX columns read `n/a`. On macOS,
+  `P-RX`/`P-TX` may still show the owning process's aggregate rate.
 - On terminals shorter than 46 rows, the program switches to the connection view
   automatically so the panel remains usable instead of being squeezed out by the
   metric layout.

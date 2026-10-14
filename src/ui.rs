@@ -1040,20 +1040,41 @@ fn render_conn_panel(f: &mut Frame, area: Rect, app: &mut App) {
     };
 
     // Header labels + the SortKey each maps to (parallel arrays).
+    let rx_label = if cfg!(target_os = "macos") {
+        "P-RX"
+    } else {
+        "RX"
+    };
+    let tx_label = if cfg!(target_os = "macos") {
+        "P-TX"
+    } else {
+        "TX"
+    };
+    let agg_labels = [
+        "USER",
+        "PROC(PID)",
+        "CPU%",
+        "MEM%",
+        "TIME+",
+        "CONNS",
+        rx_label,
+        tx_label,
+        "DISKR",
+        "DISKW",
+    ];
+    let detail_labels = [
+        "PROC(PID)",
+        "PRO",
+        "SRC",
+        "DST",
+        "HOST",
+        "SVC",
+        rx_label,
+        tx_label,
+    ];
     let (labels, keys): (&[&str], &[Option<SortKey>]) = if app.aggregate {
         (
-            &[
-                "USER",
-                "PROC(PID)",
-                "CPU%",
-                "MEM%",
-                "TIME+",
-                "CONNS",
-                "RX",
-                "TX",
-                "DISKR",
-                "DISKW",
-            ],
+            &agg_labels,
             &[
                 Some(SortKey::User),
                 Some(SortKey::Proc),
@@ -1069,7 +1090,7 @@ fn render_conn_panel(f: &mut Frame, area: Rect, app: &mut App) {
         )
     } else {
         (
-            &["PROC(PID)", "PRO", "SRC", "DST", "HOST", "SVC", "RX", "TX"],
+            &detail_labels,
             &[
                 Some(SortKey::Proc),
                 Some(SortKey::Proto),

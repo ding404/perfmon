@@ -1,9 +1,9 @@
 //! Per-connection / per-process network monitoring.
 //!
 //! Linux samples `ss -tunpi` and uses TCP cumulative counters for rates. macOS
-//! enumerates process-owned TCP/UDP sockets through `libproc`; libproc exposes
-//! ownership and endpoints but not cumulative per-socket byte counters, so
-//! macOS connection rates remain `n/a`.
+//! enumerates process-owned TCP/UDP sockets through `libproc`; process-level
+//! cumulative byte counters are read from `nettop -P` because libproc does not
+//! expose cumulative per-socket byte counters.
 
 #![cfg_attr(target_os = "macos", allow(dead_code))]
 
@@ -19,6 +19,14 @@ use std::time::Instant;
 
 #[cfg(target_os = "macos")]
 use crate::platform;
+#[cfg(target_os = "macos")]
+use std::fs::File;
+#[cfg(target_os = "macos")]
+use std::io::{BufRead, BufReader};
+#[cfg(target_os = "macos")]
+use std::os::unix::io::FromRawFd;
+#[cfg(target_os = "macos")]
+use std::process::Stdio;
 
 /// One currently logged-in user session read from utmp.
 #[derive(Clone)]
@@ -75,9 +83,11 @@ pub struct ConnStat {
     pub remote: String,
     pub comm: String,
     pub pid: Option<u32>,
-    /// Received bytes/s. `None` for UDP (kernel does not track it).
+    /// Received bytes/s. On macOS this is the owning process's rate from
+    /// `nettop -P`, not an exact per-socket rate.
     pub rx_rate: Option<f64>,
-    /// Sent bytes/s. `None` for UDP.
+    /// Sent bytes/s. On macOS this is the owning process's rate from
+    /// `nettop -P`, not an exact per-socket rate.
     pub tx_rate: Option<f64>,
     /// Reverse-DNS host name for the remote IP. `None` while unresolved or
     /// when the IP has no PTR record.
@@ -124,6 +134,106 @@ pub struct ProcInfo {
 
 type Key = (String, String, String);
 
+#[cfg(target_os = "macos")]
+struct ProcessTrafficSnapshot {
+    counters: HashMap<u32, (u64, u64)>,
+}
+
+/// Read the process-level cumulative counters exposed by macOS `nettop`.
+/// `libproc` supplies ownership and endpoints; `nettop` supplies bytes.
+#[cfg(target_os = "macos")]
+fn spawn_nettop_reader() -> mpsc::Receiver<ProcessTrafficSnapshot> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        // `nettop` buffers its CSV output when stdout is a pipe. Give it a
+        // pseudo-terminal so it sees an interactive output device and flushes
+        // each sample continuously.
+        let mut master_fd = -1;
+        let mut slave_fd = -1;
+        let openpty_status = unsafe {
+            libc::openpty(
+                &mut master_fd,
+                &mut slave_fd,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if openpty_status != 0 {
+            return;
+        }
+        // These descriptors are owned by the File values from this point on.
+        let master = unsafe { File::from_raw_fd(master_fd) };
+        let slave = unsafe { File::from_raw_fd(slave_fd) };
+        let stdout = match slave.try_clone() {
+            Ok(stdout) => stdout,
+            Err(_) => return,
+        };
+        let stdin = match slave.try_clone() {
+            Ok(stdin) => stdin,
+            Err(_) => return,
+        };
+        let stderr = match slave.try_clone() {
+            Ok(stderr) => stderr,
+            Err(_) => return,
+        };
+
+        let mut child = match Command::new("/usr/bin/nettop")
+            .args(["-n", "-P", "-s", "1", "-L", "0", "-J", "bytes_in,bytes_out"])
+            .stdin(Stdio::from(stdin))
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr))
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(_) => return,
+        };
+        drop(slave);
+        let mut reader = BufReader::new(master);
+        let mut counters = HashMap::new();
+        let mut line = String::new();
+
+        loop {
+            line.clear();
+            let bytes_read = match reader.read_line(&mut line) {
+                Ok(bytes_read) => bytes_read,
+                Err(_) => break,
+            };
+            if bytes_read == 0 {
+                break;
+            }
+
+            if line.contains(",bytes_in,bytes_out") {
+                let snapshot = ProcessTrafficSnapshot {
+                    counters: std::mem::take(&mut counters),
+                };
+                if !snapshot.counters.is_empty() && tx.send(snapshot).is_err() {
+                    break;
+                }
+                continue;
+            }
+
+            let fields: Vec<&str> = line.trim_end().split(',').collect();
+            if fields.len() < 3 {
+                continue;
+            }
+            let Some((_, pid_text)) = fields[0].rsplit_once('.') else {
+                continue;
+            };
+            let Ok(pid) = pid_text.parse::<u32>() else {
+                continue;
+            };
+            let rx_bytes = fields[1].parse::<u64>().unwrap_or(0);
+            let tx_bytes = fields[2].parse::<u64>().unwrap_or(0);
+            counters.insert(pid, (rx_bytes, tx_bytes));
+        }
+
+        let _ = child.kill();
+        let _ = child.wait();
+    });
+    rx
+}
+
 /// Worker-owned sampler that runs `ss` and `/proc` reads without touching UI
 /// interaction state.
 struct ConnSampler {
@@ -161,11 +271,19 @@ struct ConnSampler {
     /// modules such as ldap/sssd that a static musl build cannot use directly).
     /// Misses are cached too, so we never re-spawn `getent` for the same uid.
     uid_cache: HashMap<u32, String>,
+    #[cfg(target_os = "macos")]
+    nettop_rx: mpsc::Receiver<ProcessTrafficSnapshot>,
+    #[cfg(target_os = "macos")]
+    nettop_prev: HashMap<u32, (u64, u64, Instant)>,
+    #[cfg(target_os = "macos")]
+    nettop_rates: HashMap<u32, (f64, f64)>,
 }
 
 impl ConnSampler {
     fn new() -> Self {
         let (tx, rx) = mpsc::channel();
+        #[cfg(target_os = "macos")]
+        let nettop_rx = spawn_nettop_reader();
         Self {
             prev: HashMap::new(),
             last: Vec::new(),
@@ -184,6 +302,12 @@ impl ConnSampler {
             proc_io_prev: HashMap::new(),
             mem_total_kb: total_mem_kb(),
             uid_cache: HashMap::new(),
+            #[cfg(target_os = "macos")]
+            nettop_rx,
+            #[cfg(target_os = "macos")]
+            nettop_prev: HashMap::new(),
+            #[cfg(target_os = "macos")]
+            nettop_rates: HashMap::new(),
         }
     }
 
@@ -199,6 +323,51 @@ impl ConnSampler {
         self.lastlog_cache.clear();
         self.last_users_refresh = None;
         self.available = true;
+        #[cfg(target_os = "macos")]
+        {
+            self.nettop_prev.clear();
+            self.nettop_rates.clear();
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn refresh_nettop_rates(&mut self, now: Instant) {
+        while let Ok(snapshot) = self.nettop_rx.try_recv() {
+            let mut seen = HashSet::new();
+            for (pid, (rx_bytes, tx_bytes)) in snapshot.counters {
+                seen.insert(pid);
+                let (rx_rate, tx_rate) = self
+                    .nettop_prev
+                    .get(&pid)
+                    .map(|(previous_rx, previous_tx, previous_at)| {
+                        let elapsed = now.duration_since(*previous_at).as_secs_f64();
+                        if elapsed > 0.0 {
+                            (
+                                rx_bytes.saturating_sub(*previous_rx) as f64 / elapsed,
+                                tx_bytes.saturating_sub(*previous_tx) as f64 / elapsed,
+                            )
+                        } else {
+                            (0.0, 0.0)
+                        }
+                    })
+                    .unwrap_or((0.0, 0.0));
+                self.nettop_prev.insert(pid, (rx_bytes, tx_bytes, now));
+                self.nettop_rates.insert(pid, (rx_rate, tx_rate));
+            }
+            self.nettop_prev.retain(|pid, _| seen.contains(pid));
+            self.nettop_rates.retain(|pid, _| seen.contains(pid));
+        }
+    }
+
+    fn process_net_rates(&self) -> HashMap<u32, (f64, f64)> {
+        #[cfg(target_os = "macos")]
+        {
+            self.nettop_rates.clone()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            HashMap::new()
+        }
     }
 
     /// Recompute `self.procs` for every pid present in `conns`, and update
@@ -535,6 +704,7 @@ impl ConnSampler {
     #[cfg(target_os = "macos")]
     fn sample(&mut self) -> io::Result<()> {
         let now = Instant::now();
+        self.refresh_nettop_rates(now);
 
         while let Ok((ip, host)) = self.rx.try_recv() {
             self.host_cache.insert(ip, host);
@@ -583,18 +753,23 @@ impl ConnSampler {
                 disk_write_rate: 0.0,
             });
 
+            let (process_rx_rate, process_tx_rate) = self
+                .nettop_rates
+                .get(&connection.pid)
+                .copied()
+                .unwrap_or((0.0, 0.0));
+            let has_process_rate = self.nettop_rates.contains_key(&connection.pid);
+
             conns.push(ConnStat {
                 proto: connection.protocol,
                 local: connection.local,
                 remote: connection.remote,
                 comm: connection.comm,
                 pid: Some(connection.pid),
-                // libproc identifies socket ownership and endpoints, but does
-                // not expose cumulative per-socket byte counters. Keep rates
-                // unavailable instead of presenting socket-buffer occupancy as
-                // network throughput.
-                rx_rate: None,
-                tx_rate: None,
+                // These are process-level rates from nettop, repeated on each
+                // socket row because libproc has no per-socket byte counters.
+                rx_rate: has_process_rate.then_some(process_rx_rate),
+                tx_rate: has_process_rate.then_some(process_tx_rate),
                 host,
                 service,
             });
@@ -645,6 +820,7 @@ struct WorkerSnapshot {
     available: bool,
     last: Vec<ConnStat>,
     procs: HashMap<u32, ProcInfo>,
+    net_rates: HashMap<u32, (f64, f64)>,
     users: Vec<UserRow>,
 }
 
@@ -657,6 +833,7 @@ pub struct ConnMonitor {
     pub users: Vec<UserRow>,
     pub available: bool,
     procs: HashMap<u32, ProcInfo>,
+    net_rates: HashMap<u32, (f64, f64)>,
     last_max_rows: usize,
     command_tx: mpsc::Sender<WorkerCommand>,
     snapshot_rx: mpsc::Receiver<WorkerSnapshot>,
@@ -674,14 +851,21 @@ impl ConnMonitor {
                 match command {
                     WorkerCommand::Sample(generation) => {
                         let result = sampler.sample();
-                        let (available, last, procs, users) = match result {
+                        let (available, last, procs, net_rates, users) = match result {
                             Ok(()) => (
                                 sampler.available,
                                 sampler.last.clone(),
                                 sampler.procs.clone(),
+                                sampler.process_net_rates(),
                                 sampler.users.clone(),
                             ),
-                            Err(_) => (false, Vec::new(), HashMap::new(), sampler.users.clone()),
+                            Err(_) => (
+                                false,
+                                Vec::new(),
+                                HashMap::new(),
+                                HashMap::new(),
+                                sampler.users.clone(),
+                            ),
                         };
                         if snapshot_tx
                             .send(WorkerSnapshot {
@@ -689,6 +873,7 @@ impl ConnMonitor {
                                 available,
                                 last,
                                 procs,
+                                net_rates,
                                 users,
                             })
                             .is_err()
@@ -709,6 +894,7 @@ impl ConnMonitor {
             users: Vec::new(),
             available: true,
             procs: HashMap::new(),
+            net_rates: HashMap::new(),
             last_max_rows: 10,
             command_tx,
             snapshot_rx,
@@ -742,6 +928,7 @@ impl ConnMonitor {
             self.available = snapshot.available;
             self.last = snapshot.last;
             self.procs = snapshot.procs;
+            self.net_rates = snapshot.net_rates;
             self.users = snapshot.users;
         }
     }
@@ -753,6 +940,7 @@ impl ConnMonitor {
         let _ = self.command_tx.send(WorkerCommand::Reset);
         self.sample_pending = false;
         self.procs.clear();
+        self.net_rates.clear();
         self.users.clear();
         self.scroll = 0;
         self.last.clear();
@@ -1552,8 +1740,30 @@ impl ConnMonitor {
                 }
             });
             entry.count += 1;
-            entry.rx_rate += c.rx_rate.unwrap_or(0.0);
-            entry.tx_rate += c.tx_rate.unwrap_or(0.0);
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(pid) = c.pid {
+                    if let Some((rx_rate, tx_rate)) = self.net_rates.get(&pid) {
+                        if entry.count == 1 {
+                            entry.rx_rate = *rx_rate;
+                            entry.tx_rate = *tx_rate;
+                        }
+                    } else {
+                        // Keep synthetic/offline data useful when nettop is
+                        // unavailable. Real macOS samples use the branch above.
+                        entry.rx_rate += c.rx_rate.unwrap_or(0.0);
+                        entry.tx_rate += c.tx_rate.unwrap_or(0.0);
+                    }
+                } else {
+                    entry.rx_rate += c.rx_rate.unwrap_or(0.0);
+                    entry.tx_rate += c.tx_rate.unwrap_or(0.0);
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                entry.rx_rate += c.rx_rate.unwrap_or(0.0);
+                entry.tx_rate += c.tx_rate.unwrap_or(0.0);
+            }
         }
         let mut rows: Vec<AggRow> = map.into_values().collect();
         rows.sort_by(|a, b| {
